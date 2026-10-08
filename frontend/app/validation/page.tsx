@@ -1,9 +1,129 @@
 "use client";
-import { useEffect,useState } from "react";
-import { CheckCircle2, RefreshCw, XCircle } from "lucide-react";
+
+import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
-import { api } from "@/lib/api";
+import { EmptyState, ErrorState, Panel, SkeletonRows } from "@/components/ui";
+import { api, fmtDateTime } from "@/lib/api";
 
-type Validation={passed:boolean;results:{name:string;passed:boolean;detail:string}[];note:string};
-export default function ValidationPage(){const [data,setData]=useState<Validation|null>(null);const [error,setError]=useState('');const [loading,setLoading]=useState(true);const load=()=>{setLoading(true);setError('');api<Validation>('/demo/validation').then(setData).catch(e=>setError(e.message)).finally(()=>setLoading(false))};useEffect(load,[]);return <AppShell><div className="page"><PageHeader title="Controlled validation" description="LeakLedger validates deterministic failure modes explicitly. These are controlled simulations, not claims of field detection accuracy." actions={<button className="btn" onClick={load}><RefreshCw size={15} style={{verticalAlign:'-2px',marginRight:6}}/>Re-run validation</button>}/>{error&&<div className="card error-banner">{error}</div>}{loading&&!data?<div className="muted">Running controlled scenarios…</div>:data&&<><div className="card" style={{padding:22,display:'flex',alignItems:'center',justifyContent:'space-between',gap:20,marginBottom:16}}><div><div className="kicker">Validation status</div><h2 style={{fontSize:28,margin:'8px 0 4px'}}>{data.passed?'All controlled scenarios passed':'A controlled scenario failed'}</h2><div className="muted">{data.note}</div></div>{data.passed?<CheckCircle2 size={38} color="var(--accent)"/>:<XCircle size={38} color="var(--danger)"/>}</div><div className="grid-2">{data.results.map(r=><div key={r.name} className="card" style={{padding:20}}><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}><strong>{r.name}</strong>{r.passed?<span className="status status-RESOLVED">PASS</span>:<span className="status status-OPEN">FAIL</span>}</div><p className="muted" style={{fontSize:13,lineHeight:1.6,marginBottom:0}}>{r.detail}</p></div>)}</div></>}</div></AppShell>}
+type Validation = {
+  passed: boolean;
+  results: { name: string; passed: boolean; detail: string }[];
+  note: string;
+};
+
+const EXPECTED: Record<string, string> = {
+  "Normal site": "0 incidents",
+  "Hidden Hostel B loss": "Localise to HOSTEL-B-MAIN",
+  "Missing meter fails closed": "Fail closed, no stronger claim",
+  "Counter reset": "No negative leak conclusion",
+  "Duplicate event": "No double counting",
+  "Repair verification": "Resolve after 3 healthy intervals",
+  "Failed repair": "REPAIR_FAILED",
+};
+
+export default function ValidationPage() {
+  const [data, setData] = useState<Validation | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [duration, setDuration] = useState<number | null>(null);
+  const [ranAt, setRanAt] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const started = performance.now();
+    try {
+      const result = await api<Validation>("/demo/validation");
+      setData(result);
+      setDuration(Math.round(performance.now() - started));
+      setRanAt(new Date().toISOString());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const passed = data?.results.filter((r) => r.passed).length ?? 0;
+  const total = data?.results.length ?? 0;
+
+  return (
+    <AppShell>
+      <PageHeader
+        title="Controlled Validation"
+        description="Deterministic failure modes are validated explicitly. These are controlled simulations, not claims of field detection accuracy."
+        actions={
+          <button className="btn" onClick={load} disabled={loading}>
+            <RefreshCw size={14} /> {loading ? "Running…" : "Re-run validation"}
+          </button>
+        }
+        meta={
+          data ? (
+            <>
+              <span>Result <strong className={data.passed ? "text-success" : "text-danger"}>{data.passed ? "All scenarios passed" : "Scenario failure"}</strong></span>
+              <span>{passed} / {total} passed</span>
+              {ranAt && <span>Run {fmtDateTime(ranAt)}</span>}
+              {duration !== null && <span>Completed in {duration} ms</span>}
+            </>
+          ) : undefined
+        }
+      />
+
+      {error && <ErrorState title="Validation run failed" message={error} onRetry={load} />}
+
+      {loading && !data && (
+        <Panel title="Controlled scenarios">
+          <SkeletonRows rows={7} cols={4} />
+        </Panel>
+      )}
+
+      {data && (
+        <>
+          <Panel flush>
+            {data.results.length === 0 ? (
+              <EmptyState title="No validation results" />
+            ) : (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Scenario</th>
+                      <th>Expected</th>
+                      <th>Result</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.results.map((r) => (
+                      <tr key={r.name}>
+                        <td><span className="strong">{r.name}</span></td>
+                        <td className="muted">{EXPECTED[r.name] ?? "—"}</td>
+                        <td>
+                          <span className={`badge badge-${r.passed ? "success" : "danger"}`}>
+                            <span className="badge-dot" aria-hidden="true" />
+                            {r.passed ? "PASS" : "FAIL"}
+                          </span>
+                        </td>
+                        <td className="muted">{r.detail}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Scope and interpretation" className="mt-16">
+            <p className="muted small mb-0" style={{ lineHeight: 1.65 }}>{data.note}</p>
+          </Panel>
+        </>
+      )}
+    </AppShell>
+  );
+}

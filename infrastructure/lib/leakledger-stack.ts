@@ -34,6 +34,8 @@ export class LeakLedgerStack extends cdk.Stack {
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecovery: true,
+      // Idempotency claims expire so the site partition stays bounded over time.
+      timeToLiveAttribute: 'expires_at',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -97,8 +99,9 @@ export class LeakLedgerStack extends cdk.Stack {
       batchSize: 10,
       maxBatchingWindow: cdk.Duration.seconds(2),
       reportBatchItemFailures: true,
-      // Keep sibling meter events batched together and reduce interval reordering.
-      maxConcurrency: 2,
+      // Keep sibling meter events batched together while allowing enough pollers
+      // to drain bursty replay stepping promptly (account concurrency is small).
+      maxConcurrency: 5,
     }));
 
     stateTable.grantReadWriteData(apiFn);

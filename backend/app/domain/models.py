@@ -141,6 +141,7 @@ class Incident:
     post_repair_residuals: list[float] = field(default_factory=list)
     verification_last_interval_end: Optional[str] = None
     pre_evidence_status: Optional[str] = None
+    verification_floor_interval_end: Optional[str] = None
 
 
 @dataclass

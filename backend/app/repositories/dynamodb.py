@@ -37,6 +37,8 @@ def _json_default(value: Any):
 
 
 LOCK_SK = "STATE#WRITE_LOCK"
+# Idempotency claims are only meaningful while a message could still be redelivered.
+IDEMPOTENCY_TTL_SECONDS = 30 * 24 * 3600
 
 
 def _payload(value: Any) -> str:
@@ -94,6 +96,7 @@ def _incident(d: dict[str, Any]) -> Incident:
         post_repair_residuals=[float(x) for x in d.get("post_repair_residuals", [])],
         verification_last_interval_end=d.get("verification_last_interval_end"),
         pre_evidence_status=d.get("pre_evidence_status"),
+        verification_floor_interval_end=d.get("verification_floor_interval_end"),
     )
 
 
@@ -271,21 +274,127 @@ class DynamoDbStateRepository:
                     "sk": f"IDEMPOTENCY#{event_id}",
                     "entity": "IDEMPOTENCY",
                     "status": "DONE",
+                    "expires_at": Decimal(int(time.time()) + IDEMPOTENCY_TTL_SECONDS),
                     "payload": "{}",
                 })
 
+    # ------------------------------------------------------------------
+    # Targeted (delta) writes. The full-store save above rewrites every
+    # historical item, which grows with the ledger and makes the site write
+    # lock expensive under bursty replay stepping. These helpers persist only
+    # what a single operation changed.
+    # ------------------------------------------------------------------
+    def _write_batch(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        with self.table.batch_writer(overwrite_by_pkeys=["pk", "sk"]) as batch:
+            for item in items:
+                batch.put_item(Item=item)
+
+    @staticmethod
+    def _reading_item(pk: str, reading: MeterReading) -> dict[str, Any]:
+        return {
+            "pk": pk,
+            "sk": f"READING#{reading.meter_id}#{reading.timestamp}#{reading.event_id}",
+            "entity": "READING",
+            "meter_id": reading.meter_id,
+            "timestamp": reading.timestamp,
+            "payload": _payload(reading),
+        }
+
+    @staticmethod
+    def _balance_item(pk: str, balance: BalanceResult) -> dict[str, Any]:
+        return {
+            "pk": pk,
+            "sk": f"BALANCE#{balance.interval_end}#{balance.node_id}",
+            "entity": "BALANCE",
+            "timestamp": balance.interval_end,
+            "payload": _payload(balance),
+        }
+
+    @staticmethod
+    def _incident_item(pk: str, incident: Incident) -> dict[str, Any]:
+        return {
+            "pk": pk,
+            "sk": f"INCIDENT#{incident.id}",
+            "entity": "INCIDENT",
+            "status": incident.status.value,
+            "payload": _payload(incident),
+        }
+
+    @staticmethod
+    def _audit_item(pk: str, event: AuditEvent) -> dict[str, Any]:
+        digest = hashlib.sha1(_payload(event).encode()).hexdigest()[:12]
+        return {
+            "pk": pk,
+            "sk": f"AUDIT#{event.timestamp}#{digest}",
+            "entity": "AUDIT",
+            "timestamp": event.timestamp,
+            "payload": _payload(event),
+        }
+
+    def save_readings(self, site_id: str, readings: list[MeterReading], audit_events: list[AuditEvent] | None = None) -> None:
+        pk = self.pk(site_id)
+        items = [self._reading_item(pk, r) for r in readings]
+        items.extend(self._audit_item(pk, a) for a in (audit_events or []))
+        self._write_batch(items)
+
+    def save_reconciliation(
+        self,
+        site_id: str,
+        *,
+        readings: list[MeterReading],
+        balances: list[BalanceResult],
+        audit_events: list[AuditEvent],
+        incidents: list[Incident],
+        persistence: dict[str, int],
+        persistence_last_interval: dict[str, str],
+        processed_event_ids: list[str],
+    ) -> None:
+        pk = self.pk(site_id)
+        items = [self._reading_item(pk, r) for r in readings]
+        items.extend(self._balance_item(pk, b) for b in balances)
+        items.extend(self._audit_item(pk, a) for a in audit_events)
+        items.extend(self._incident_item(pk, i) for i in incidents)
+        items.append({
+            "pk": pk,
+            "sk": "STATE#PERSISTENCE",
+            "entity": "STATE",
+            "payload": json.dumps({"counts": persistence, "last_interval": persistence_last_interval}, sort_keys=True),
+        })
+        items.extend(self._idempotency_item(pk, eid) for eid in processed_event_ids)
+        self._write_batch(items)
+
+    def save_incidents(self, site_id: str, incidents: list[Incident]) -> None:
+        pk = self.pk(site_id)
+        self._write_batch([self._incident_item(pk, i) for i in incidents])
+
+    def save_audit_events(self, site_id: str, events: list[AuditEvent]) -> None:
+        pk = self.pk(site_id)
+        self._write_batch([self._audit_item(pk, a) for a in events])
+
+    def save_node(self, site_id: str, node: MeterNode) -> None:
+        pk = self.pk(site_id)
+        self._write_batch([{"pk": pk, "sk": f"NODE#{node.id}", "entity": "NODE", "payload": _payload(node)}])
+
+    @staticmethod
+    def _idempotency_item(pk: str, event_id: str, status: str = "DONE") -> dict[str, Any]:
+        return {
+            "pk": pk,
+            "sk": f"IDEMPOTENCY#{event_id}",
+            "entity": "IDEMPOTENCY",
+            "status": status,
+            "expires_at": Decimal(int(time.time()) + IDEMPOTENCY_TTL_SECONDS),
+            "payload": "{}",
+        }
+
     def claim_event(self, site_id: str, event_id: str) -> bool:
         now = int(time.time())
+        item = self._idempotency_item(self.pk(site_id), event_id, "PROCESSING")
+        item["claimed_at"] = Decimal(now)
         try:
             self.table.put_item(
-                Item={
-                    "pk": self.pk(site_id),
-                    "sk": f"IDEMPOTENCY#{event_id}",
-                    "entity": "IDEMPOTENCY",
-                    "status": "PROCESSING",
-                    "claimed_at": Decimal(now),
-                    "payload": "{}",
-                },
+                Item=item,
                 ConditionExpression=(
                     "attribute_not_exists(sk) OR "
                     "(#status = :processing AND (attribute_not_exists(claimed_at) OR claimed_at < :stale))"
@@ -368,11 +477,10 @@ class DynamoDbStateRepository:
     def clear_operational_state(self, site_id: str = "northbridge") -> None:
         pk = self.pk(site_id)
         items = self._all_items(site_id)
-        # Topology, settings and idempotency claims are preserved across demo resets:
-        # keeping claims prevents in-flight messages from a previous generation being
-        # replayed into the new run, while generation-tagged demo event ids keep the
-        # same scenario replayable.
-        keep_prefixes = ("NODE#", "CONFIG#", "IDEMPOTENCY#")
+        # Topology and settings survive a reset. Idempotency claims are dropped because
+        # demo event ids are generation-tagged: messages from the previous generation are
+        # rejected as superseded, so no stale claim needs to be retained.
+        keep_prefixes = ("NODE#", "CONFIG#")
         with self.table.batch_writer() as batch:
             for item in items:
                 sk = item["sk"]

@@ -6,8 +6,66 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { USERS } from "@/lib/user";
 
-export default function SignIn(){
-  const router=useRouter();
-  const choose=(id:string)=>{localStorage.setItem('leakledger-user',id);router.push('/overview')};
-  return <main style={{minHeight:"100vh",display:"grid",placeItems:"center",padding:24}}><div style={{width:"100%",maxWidth:920}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:34}}><Logo/><Link href="/" className="muted" style={{display:"flex",alignItems:"center",gap:7,fontSize:14}}><ArrowLeft size={15}/>Back to site</Link></div><div className="kicker">Demo identity selector</div><h1 style={{fontSize:42,letterSpacing:"-.045em",margin:"10px 0"}}>Choose who is operating LeakLedger.</h1><p className="muted" style={{maxWidth:700,lineHeight:1.6}}>This hackathon environment intentionally performs no authentication. Identity only changes the demo persona and records the actor in operational actions.</p><div className="card2" style={{padding:12,margin:"22px 0",color:"var(--warn)",fontSize:13}}>Demo environment — identities are simulated and no authentication or authorization is performed.</div><div className="persona-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>{USERS.map(u=><button key={u.id} onClick={()=>choose(u.id)} className="card" style={{textAlign:"left",padding:22,color:"inherit",transition:'.15s ease'}}><div style={{width:48,height:48,borderRadius:11,display:"grid",placeItems:"center",background:"#152720",border:"1px solid #2f5246",color:"var(--accent)",fontWeight:850}}>{u.initials}</div><h2 style={{fontSize:20,margin:"20px 0 4px"}}>{u.name}</h2><div style={{color:"var(--accent)",fontSize:13,fontWeight:750}}>{u.role}</div><p className="muted" style={{minHeight:58,lineHeight:1.5,fontSize:13}}>{u.description}</p><div style={{display:"flex",alignItems:"center",gap:7,fontWeight:800,fontSize:13}}>Continue as {u.name.split(' ')[0]} <ArrowRight size={15}/></div></button>)}</div></div></main>
+export default function SignIn() {
+  const router = useRouter();
+
+  const choose = (id: string) => {
+    localStorage.setItem("leakledger-user", id);
+    router.push("/overview");
+  };
+
+  return (
+    <main style={{ minHeight: "100vh", background: "var(--bg)" }}>
+      <div
+        style={{
+          maxWidth: 1040,
+          margin: "0 auto",
+          padding: "20px 24px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <Link href="/" aria-label="LeakLedger home">
+          <Logo />
+        </Link>
+        <Link href="/" className="btn btn-ghost btn-sm">
+          <ArrowLeft size={14} /> Back to site
+        </Link>
+      </div>
+
+      <div style={{ maxWidth: 520, margin: "0 auto", padding: "48px 24px 64px" }}>
+        <div className="landing-kicker">Demo identity selector</div>
+        <h1 style={{ fontSize: 27, fontWeight: 650, letterSpacing: "-0.025em", margin: "12px 0 10px" }}>
+          Choose a demo workspace identity
+        </h1>
+        <p className="muted" style={{ lineHeight: 1.6, margin: 0 }}>
+          Demo environment — identities are simulated and no authentication is performed. The selected persona is
+          recorded as the actor on operational actions.
+        </p>
+
+        <div className="mt-24">
+          {USERS.map((u) => (
+            <button key={u.id} className="persona-row" onClick={() => choose(u.id)}>
+              <span className="persona-avatar" aria-hidden="true">{u.initials}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span className="flex-between" style={{ gap: 8 }}>
+                  <strong style={{ fontSize: 14 }}>{u.name}</strong>
+                  <span className="muted tiny">{u.role}</span>
+                </span>
+                <span className="muted small" style={{ display: "block", marginTop: 2 }}>{u.description}</span>
+              </span>
+              <ArrowRight size={15} className="muted-2" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+
+        <div className="banner banner-info mt-24" style={{ marginBottom: 0 }}>
+          <span className="small">
+            One click enters the application. No password, token or Cognito flow is involved.
+          </span>
+        </div>
+      </div>
+    </main>
+  );
 }

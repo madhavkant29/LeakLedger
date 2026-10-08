@@ -85,3 +85,15 @@ CloudFront cannot be created in this account until AWS Support verifies it:
 `Access denied ... Your account must be verified before you can add new CloudFront resources.`
 
 The frontend is therefore served through the API Gateway HTTPS URL (same static export, all routes verified). Once the account is verified, set `"leakledger:cloudfront": "true"` in `infrastructure/cdk.json` and run `npx cdk deploy LeakLedgerStack` to switch to the designed S3+CloudFront edge without any application changes.
+
+## UI and runtime hardening (post-deployment)
+
+The frontend was rebuilt as a light, operational SaaS console (design tokens, sidebar shell, dense tables, evidence panels, engineering console, controlled-validation report). Alongside it, the AWS runtime received correctness and throughput hardening required by the UI's live polling and burst playback:
+
+- Per-interval reconciliation: the worker reconciles the physical interval carried by each batch, so burst stepping can no longer skip persistence intervals or fail to open an incident.
+- Targeted delta writes replace whole-store rewrites; idempotency claims carry a TTL and are dropped on reset, keeping the site partition bounded.
+- Site write lock still serializes all mutations; stale claims are re-claimable after the Lambda timeout window.
+- Repair verification is floor-guarded by the interval present when the repair was recorded, and insufficient-evidence intervals during verification are recorded instead of silently skipped.
+- The API Lambda serves existing static files before API routing so Next.js RSC prefetches (for example `/incidents/index.txt`) are not captured by `/incidents/{incident_id}`.
+- Replay auto-run paces itself to actual pipeline processing; manual stepping remains immediate.
+

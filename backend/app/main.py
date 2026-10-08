@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.responses import FileResponse
 
 from app.aws.runtime import AwsRuntime, engine_for, site_write_lock
 from app.domain.models import AuditEvent, MeterReading, NodeKind, RepairAction, SiteSettings, to_dict
@@ -57,6 +58,33 @@ class StripApiPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
+class StaticFileMiddleware:
+    """Serve an exported static file before API routing.
+
+    Next.js prefetches RSC payloads such as `/incidents/index.txt`, which would
+    otherwise be captured by the `/incidents/{incident_id}` API route. Only real
+    files are short-circuited; everything else falls through to the API.
+    """
+
+    def __init__(self, app, directory):
+        self.app = app
+        self.directory = Path(directory).resolve()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("method") in {"GET", "HEAD"}:
+            path = scope.get("path", "/")
+            if not path.startswith("/api"):
+                candidate = (self.directory / path.lstrip("/")).resolve()
+                try:
+                    candidate.relative_to(self.directory)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate.is_file():
+                    await FileResponse(candidate)(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="LeakLedger API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -66,6 +94,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(StripApiPrefixMiddleware)
+if SERVE_FRONTEND and FRONTEND_DIR.is_dir():
+    app.add_middleware(StaticFileMiddleware, directory=str(FRONTEND_DIR))
 
 store = LocalStore(nodes=seed_nodes())
 engine = engine_for(store.settings)
@@ -220,6 +250,19 @@ def ingest_one_local(reading: MeterReading) -> dict[str, Any]:
 def persist_aws_store(s: LocalStore) -> None:
     assert aws_runtime is not None
     aws_runtime.repository.save_store(s, SITE_ID)
+
+
+def persist_incident(s: LocalStore, incident, audit_events) -> None:
+    """Persist one incident plus its new audit events instead of rewriting the whole store."""
+    assert aws_runtime is not None
+    repo = aws_runtime.repository
+    save_incidents = getattr(repo, "save_incidents", None)
+    save_audit = getattr(repo, "save_audit_events", None)
+    if save_incidents is not None and save_audit is not None:
+        save_incidents(SITE_ID, [incident])
+        save_audit(SITE_ID, audit_events)
+    else:
+        repo.save_store(s, SITE_ID)
 
 
 @contextmanager
@@ -430,12 +473,13 @@ def _transition(incident_id: str, action: str, actor: str):
         if incident_id not in s.incidents:
             raise HTTPException(404, "Incident not found")
         service = service_for(s)
+        audit_before = len(s.audit)
         try:
             result = service.transition(s, incident_id, action, actor)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         if MODE == "aws":
-            persist_aws_store(s)
+            persist_incident(s, result, s.audit[audit_before:])
             assert aws_runtime is not None
             aws_runtime.events.publish_domain_event("IncidentStateChanged", SITE_ID, {"incident_id": incident_id, "status": result.status.value, "actor": actor})
     return to_dict(result)
@@ -458,6 +502,7 @@ def repair(incident_id: str, body: RepairIn):
         if incident_id not in s.incidents:
             raise HTTPException(404, "Incident not found")
         service = service_for(s)
+        audit_before = len(s.audit)
         try:
             action = RepairAction(
                 timestamp=datetime.now(timezone.utc).isoformat(), actor=body.actor, repair_type=body.repair_type,
@@ -465,10 +510,11 @@ def repair(incident_id: str, body: RepairIn):
             )
             result = service.record_repair(s, incident_id, action)
             result.verification_required_intervals = s.settings.verification_required_intervals
+            result.verification_floor_interval_end = max((b.interval_end for b in s.balances), default=None)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         if MODE == "aws":
-            persist_aws_store(s)
+            persist_incident(s, result, s.audit[audit_before:])
             assert aws_runtime is not None
             aws_runtime.events.publish_domain_event("RepairReported", SITE_ID, {"incident_id": incident_id, "actor": body.actor})
     return to_dict(result)
@@ -504,7 +550,12 @@ def update_node_config(site_id: str, node_id: str, body: NodeConfigIn):
         node.storage_change_m3_per_interval = body.storage_change_m3_per_interval
         node.active = body.active
         if MODE == "aws":
-            persist_aws_store(s)
+            assert aws_runtime is not None
+            save_node = getattr(aws_runtime.repository, "save_node", None)
+            if save_node is not None:
+                save_node(SITE_ID, node)
+            else:
+                persist_aws_store(s)
     return to_dict(node)
 
 
@@ -526,7 +577,11 @@ def put_settings(site_id: str, body: SettingsIn):
             s.settings = settings
             for item in s.incidents.values():
                 item.verification_required_intervals = settings.verification_required_intervals
-            aws_runtime.repository.save_store(s, site_id)
+            save_incidents = getattr(aws_runtime.repository, "save_incidents", None)
+            if save_incidents is not None:
+                save_incidents(site_id, list(s.incidents.values()))
+            else:
+                aws_runtime.repository.save_store(s, site_id)
     else:
         store.settings = settings
         for item in store.incidents.values():

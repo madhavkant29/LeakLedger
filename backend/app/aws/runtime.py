@@ -59,8 +59,8 @@ class AwsRuntime:
     # Lambda invocations. A batch waits briefly for its sibling meters so a complete
     # interval is reconciled once; if the interval never completes (a genuinely
     # missing meter), the deadline expires and fail-closed evaluation still happens.
-    SETTLE_TIMEOUT_SECONDS = 8.0
-    SETTLE_POLL_SECONDS = 0.75
+    SETTLE_TIMEOUT_SECONDS = 5.0
+    SETTLE_POLL_SECONDS = 0.5
 
     def __init__(
         self,
@@ -110,6 +110,7 @@ class AwsRuntime:
                 self.metrics.increment("DuplicateEventsIgnored", site_id=site_id)
         if not claimed:
             return {"processed": 0, "duplicates": duplicates, "balances": 0, "incident": None}
+        batch_timestamp = claimed[0].timestamp
         deadline = time.time() + self.SETTLE_TIMEOUT_SECONDS
         appended_total: list[MeterReading] = []
         already_total = 0
@@ -122,16 +123,17 @@ class AwsRuntime:
                     store = self.repository.load_store(site_id)
                     demo_state = self.repository.get_demo_state(site_id)
                     generation = demo_state.get("generation") if demo_state else None
+                    audit_before = len(store.audit)
                     appended, already, stale, superseded = self._append_readings(store, claimed, generation)
+                    appended_audit = store.audit[audit_before:]
                     appended_total.extend(appended)
                     already_total += already
                     stale_total += stale
                     superseded_total += superseded
                     if appended:
-                        self.repository.save_store(store, site_id)
-                    newest = self._site_newest_timestamp(store)
-                    newest_complete = newest is not None and self._interval_complete(store, newest)
-                    if newest_complete or time.time() >= deadline:
+                        self._persist_readings(site_id, store, appended, appended_audit)
+                    complete = self._interval_complete(store, batch_timestamp)
+                    if complete or time.time() >= deadline:
                         result = self._reconcile_locked(site_id, store, claimed, started, duplicates, appended_total, already_total, stale_total, superseded_total)
                 if result is None:
                     time.sleep(self.SETTLE_POLL_SECONDS)
@@ -141,11 +143,19 @@ class AwsRuntime:
             raise
         return result
 
+    def _persist_readings(self, site_id, store, readings: list[MeterReading], audit_events: list[AuditEvent]) -> None:
+        save_readings = getattr(self.repository, "save_readings", None)
+        if save_readings is not None:
+            save_readings(site_id, readings, audit_events)
+        else:
+            self.repository.save_store(store, site_id)
+
     def _reconcile_locked(self, site_id, store, claimed, started, duplicates, appended_total, already_total, stale_total, superseded_total) -> dict[str, Any]:
+        audit_before = len(store.audit)
         engine = engine_for(store.settings)
         incident_service = IncidentService(engine)
         before = {i.id: i.status.value for i in store.incidents.values()}
-        balances = engine.reconcile_all(store, require_reading_pairs=True)
+        balances = engine.reconcile_all(store, require_reading_pairs=True, interval_end=claimed[0].timestamp)
         incident = incident_service.evaluate(store, balances)
         correlation_id = f"batch:{claimed[0].timestamp}:{claimed[0].event_id}"
         for balance in balances:
@@ -160,7 +170,21 @@ class AwsRuntime:
             item.verification_required_intervals = store.settings.verification_required_intervals
         for reading in claimed:
             store.processed_event_ids.add(reading.event_id)
-        self.repository.save_store(store, site_id)
+        new_audit = store.audit[audit_before:]
+        save_reconciliation = getattr(self.repository, "save_reconciliation", None)
+        if save_reconciliation is not None:
+            save_reconciliation(
+                site_id,
+                readings=appended_total,
+                balances=balances,
+                audit_events=new_audit,
+                incidents=list(store.incidents.values()),
+                persistence=store.persistence,
+                persistence_last_interval=store.persistence_last_interval,
+                processed_event_ids=[r.event_id for r in claimed],
+            )
+        else:
+            self.repository.save_store(store, site_id)
         for reading in claimed:
             self.repository.mark_event_done(site_id, reading.event_id)
 
@@ -198,22 +222,6 @@ class AwsRuntime:
             if not any(r.timestamp == timestamp for r in store.readings.get(node.id, [])):
                 return False
         return True
-
-    @staticmethod
-    def _site_newest_timestamp(store) -> str | None:
-        newest_ts: str | None = None
-        newest_parsed: datetime | None = None
-        for node in store.nodes.values():
-            if node.kind != NodeKind.METER:
-                continue
-            rows = store.readings.get(node.id, [])
-            if not rows:
-                continue
-            parsed = _parse_ts(rows[-1].timestamp)
-            if newest_parsed is None or parsed > newest_parsed:
-                newest_parsed = parsed
-                newest_ts = rows[-1].timestamp
-        return newest_ts
 
     def _append_readings(self, store, claimed: list[MeterReading], current_generation: str | None = None) -> tuple[list[MeterReading], int, int, int]:
         """Append only readings that advance the ledger for their meter.

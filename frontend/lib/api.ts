@@ -24,3 +24,46 @@ export function fmt(n?: number | null, digits = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
+
+export function fmtInt(n?: number | null) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return Math.round(n).toLocaleString();
+}
+
+export function fmtPct(n?: number | null, digits = 0) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return `${(n * 100).toFixed(digits)}%`;
+}
+
+export function fmtTime(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+export function fmtDateTime(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+}
+
+export function fmtInterval(start?: string | null, end?: string | null) {
+  if (!start || !end) return "—";
+  return `${fmtTime(start)}–${fmtTime(end)}`;
+}
+
+export function timeAgo(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}

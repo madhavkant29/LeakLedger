@@ -1,30 +1,276 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, Database, GitBranch, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowRight, Check } from "lucide-react";
 import { Logo } from "@/components/Logo";
 
-const Row = ({left,right,accent=false}:{left:string,right:string,accent?:boolean}) => <div style={{display:"flex",justifyContent:"space-between",gap:24,padding:"10px 0",borderBottom:"1px solid var(--line)",fontVariantNumeric:"tabular-nums"}}><span className="muted">{left}</span><strong style={{color:accent?"var(--danger)":"var(--text)"}}>{right}</strong></div>;
+const STEPS = [
+  {
+    title: "Reconcile",
+    desc: "Inflow minus measured downstream use, known unmetered use and storage change.",
+  },
+  {
+    title: "Validate",
+    desc: "Coverage, completeness, freshness, alignment and counter continuity are checked first.",
+  },
+  {
+    title: "Localise",
+    desc: "Descend only through branches where the evidence still supports a narrower claim.",
+  },
+  {
+    title: "Repair",
+    desc: "Maintenance records what was fixed; the incident moves to verification, not resolution.",
+  },
+  {
+    title: "Verify",
+    desc: "Distinct healthy intervals must complete the streak before the incident resolves.",
+  },
+];
 
-export default function Landing(){
-  return <main>
-    <header style={{position:"sticky",top:0,zIndex:20,background:"rgba(7,17,15,.92)",backdropFilter:"blur(10px)",borderBottom:"1px solid var(--line)"}}>
-      <div style={{maxWidth:1180,margin:"0 auto",padding:"14px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:24}}>
-        <Logo/><nav className="landing-nav" style={{display:"flex",alignItems:"center",gap:24,fontSize:14,color:"var(--muted)"}}><a href="#how">How it works</a><a href="#architecture">Architecture</a><a href="#why">Why LeakLedger</a><Link href="/signin" className="btn">Sign in</Link><Link href="/signin" className="btn btn-primary">Open Demo</Link></nav>
-      </div>
-    </header>
+const FLOW = ["API Gateway", "Lambda", "S3 Raw Archive", "EventBridge", "SQS", "Reconciliation", "DynamoDB"];
 
-    <section className="landing-hero" style={{maxWidth:1180,margin:"0 auto",padding:"92px 24px 72px",display:"grid",gridTemplateColumns:"1.05fr .95fr",gap:64,alignItems:"center"}}>
-      <div><div className="kicker">Water reconciliation control plane</div><h1 style={{fontSize:70,lineHeight:.98,letterSpacing:"-.065em",margin:"18px 0 24px",maxWidth:700}}>Account for every litre.</h1><p style={{fontSize:20,lineHeight:1.65,color:"var(--muted)",maxWidth:680}}>LeakLedger reconciles existing water meters, isolates unexplained losses to the deepest trustworthy boundary, and refuses to close incidents until new readings prove the repair worked.</p><div style={{display:"flex",gap:10,marginTop:30}}><Link className="btn btn-primary" href="/signin">Open Live Demo <ArrowRight size={16} style={{display:"inline",marginLeft:5}}/></Link><a className="btn" href="#how">See how it works</a></div><div style={{display:"flex",gap:22,marginTop:26,color:"var(--muted)",fontSize:13}}><span>NO AI</span><span>NO CAMERAS</span><span>NO SPECIAL HARDWARE FOR DEMO</span></div></div>
-      <div className="card" style={{padding:22,boxShadow:"0 30px 80px rgba(0,0,0,.28)"}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:18}}><div><div className="kicker">Campus water ledger</div><strong style={{fontSize:18}}>10:00–10:15</strong></div><span className="status status-ANOMALOUS">ANOMALOUS</span></div><Row left="Entered at Campus Main" right="20.62 m³"/><Row left="Accounted downstream" right="18.18 m³"/><Row left="Known unmetered" right="0.40 m³"/><Row left="Unexplained" right="2.04 m³" accent/><div style={{marginTop:18,padding:14,border:"1px solid #4e332d",background:"#1d1210",borderRadius:9}}><div style={{fontSize:12,color:"#f0a79f",fontWeight:800,letterSpacing:'.08em'}}>DEEPEST TRUSTWORTHY ANOMALY</div><div style={{fontSize:20,fontWeight:850,marginTop:5}}>Hostel B Main</div><div className="muted" style={{fontSize:13,marginTop:5}}>Localisation stops before the common branch because part of downstream consumption is explicitly unmetered.</div></div></div>
-    </section>
+function LedgerRow({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <div className="flex-between" style={{ padding: "8px 0", borderTop: "1px solid var(--border)" }}>
+      <span className="muted small">{label}</span>
+      <strong className="tabular" style={{ color: danger ? "var(--danger)" : "var(--text)" }}>{value}</strong>
+    </div>
+  );
+}
 
-    <section id="how" style={{borderTop:"1px solid var(--line)",borderBottom:"1px solid var(--line)",background:"#091310"}}><div style={{maxWidth:1180,margin:"0 auto",padding:"72px 24px"}}><div className="kicker">Not another consumption dashboard</div><h2 style={{fontSize:42,letterSpacing:"-.045em",margin:"12px 0 12px"}}>Water monitoring tells you what changed. LeakLedger reconciles what cannot be explained.</h2><div className="landing-two" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginTop:32}}><div className="card" style={{padding:24}}><div className="muted" style={{fontSize:13}}>Traditional monitoring</div><div style={{fontSize:28,fontWeight:850,marginTop:10}}>“Usage increased 18%.”</div><p className="muted">Useful context, but it does not prove where the missing water is or whether a repair succeeded.</p></div><div className="card" style={{padding:24,borderColor:"#315448"}}><div style={{fontSize:13,color:"var(--accent)"}}>LeakLedger</div><div style={{fontSize:28,fontWeight:850,marginTop:10}}>“0.35 m³ remains unexplained inside Hostel B.”</div><p className="muted">The conclusion carries its own arithmetic, coverage, completeness and localisation boundary.</p></div></div></div></section>
+export default function Landing() {
+  return (
+    <main>
+      <header className="landing-header">
+        <div className="landing-header-inner">
+          <Link href="/" aria-label="LeakLedger home">
+            <Logo />
+          </Link>
+          <nav className="landing-nav" aria-label="Landing navigation">
+            <a href="#mechanism" className="nav-hide">Mechanism</a>
+            <a href="#example" className="nav-hide">Example</a>
+            <a href="#failclosed" className="nav-hide">Fail-closed</a>
+            <a href="#architecture" className="nav-hide">Architecture</a>
+            <Link href="/signin" className="btn btn-sm">Sign in</Link>
+            <Link href="/signin" className="btn btn-primary btn-sm">Open demo</Link>
+          </nav>
+        </div>
+      </header>
 
-    <section style={{maxWidth:1180,margin:"0 auto",padding:"72px 24px"}}><div className="kicker">Operational lifecycle</div><div className="landing-five" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginTop:20}}>{[[Database,"Reconcile"],[ShieldCheck,"Validate"],[GitBranch,"Localise"],[Wrench,"Repair"],[CheckCircle2,"Verify"]].map(([Icon,label],i)=>{const I=Icon as typeof Database; return <div className="card" key={String(label)} style={{padding:18}}><div style={{display:"flex",justifyContent:"space-between"}}><I size={20}/><span className="muted" style={{fontSize:12}}>0{i+1}</span></div><strong style={{display:"block",marginTop:26,fontSize:18}}>{String(label)}</strong></div>})}</div></section>
+      <section className="landing-hero">
+        <div>
+          <div className="landing-kicker">Water reconciliation control plane</div>
+          <h1 className="landing-h1">Account for every litre.</h1>
+          <p className="landing-lede">
+            LeakLedger reconciles existing water meters, isolates unexplained loss to the deepest trustworthy
+            boundary, and refuses to close incidents until new readings prove the repair worked.
+          </p>
+          <div className="landing-actions">
+            <Link className="btn btn-primary" href="/signin">
+              Open demo <ArrowRight size={15} />
+            </Link>
+            <a className="btn" href="#mechanism">See how it works</a>
+          </div>
+          <div className="landing-proof">
+            <span><Check size={13} /> No AI</span>
+            <span><Check size={13} /> No cameras</span>
+            <span><Check size={13} /> No special hardware for the demo</span>
+          </div>
+        </div>
 
-    <section id="why" style={{maxWidth:1180,margin:"0 auto",padding:"32px 24px 72px"}}><div className="card landing-fail" style={{padding:32,display:"grid",gridTemplateColumns:".8fr 1.2fr",gap:48,alignItems:"center"}}><div><div className="kicker">Fail closed by design</div><h2 style={{fontSize:38,letterSpacing:"-.04em",margin:"12px 0"}}>Missing evidence stops the accusation.</h2><p className="muted" style={{lineHeight:1.7}}>If a downstream meter disappears, clock alignment fails, a counter resets, or coverage is too low, LeakLedger pauses leak classification instead of turning incomplete observability into a confident alert.</p></div><div className="card2" style={{padding:20}}><Row left="Hostel B Floor 2" right="NO READING — 37 MIN"/><Row left="Downstream completeness" right="67%"/><Row left="Evidence" right="INSUFFICIENT"/><div style={{paddingTop:16,color:"var(--warn)",fontWeight:800}}>Leak classification paused until trustworthy evidence returns.</div></div></div></section>
+        <div className="panel" style={{ marginTop: 0 }}>
+          <div className="panel-header">
+            <div>
+              <h2 className="panel-title">Campus water ledger</h2>
+              <p className="panel-sub mono">10:00–10:15 · Campus Main</p>
+            </div>
+            <span className="badge badge-danger"><span className="badge-dot" aria-hidden="true" />Anomalous</span>
+          </div>
+          <div className="panel-body">
+            <LedgerRow label="Entered at Campus Main" value="20.62 m³" />
+            <LedgerRow label="Accounted downstream" value="18.18 m³" />
+            <LedgerRow label="Known unmetered" value="0.40 m³" />
+            <LedgerRow label="Unexplained" value="2.04 m³" danger />
+            <div
+              style={{
+                marginTop: 14,
+                padding: "12px 14px",
+                border: "1px solid var(--danger-border)",
+                background: "var(--danger-bg)",
+                borderRadius: 6,
+              }}
+            >
+              <div className="metric-label">Deepest trustworthy anomaly</div>
+              <div className="strong" style={{ marginTop: 3, fontSize: 15 }}>Hostel B Main</div>
+              <div className="muted tiny" style={{ marginTop: 4 }}>
+                Localisation stops before the common branch because part of downstream consumption is explicitly
+                unmetered.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <section id="architecture" style={{borderTop:"1px solid var(--line)",background:"#091310"}}><div style={{maxWidth:1180,margin:"0 auto",padding:"72px 24px"}}><div className="kicker">AWS-native event flow</div><h2 style={{fontSize:42,letterSpacing:"-.045em",margin:"12px 0 28px"}}>Every reading becomes evidence, not just a chart point.</h2><div className="landing-architecture" style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:8,alignItems:"center"}}>{["API Gateway","Lambda","S3 Raw Archive","EventBridge","SQS","Reconciliation","DynamoDB"].map((x,i)=><div key={x} style={{display:"contents"}}><div className="card" style={{padding:"18px 10px",textAlign:"center",fontSize:13,fontWeight:750}}>{x}</div>{i<6&&<ArrowRight size={15} className="muted"/>}</div>)}</div><p className="muted" style={{marginTop:22}}>Structured CloudWatch logs and metrics make duplicates, reconciliation decisions, incidents and repair verification inspectable end to end.</p></div></section>
+      <section className="landing-section" id="mechanism">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">How it works</div>
+          <h2 className="landing-h2">Every reading becomes evidence, not just a chart point.</h2>
+          <div className="landing-steps">
+            {STEPS.map((s, i) => (
+              <div className="landing-step" key={s.title}>
+                <span className="landing-step-num">0{i + 1}</span>
+                <span className="landing-step-title">{s.title}</span>
+                <p className="landing-step-desc">{s.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-    <footer className="landing-footer" style={{maxWidth:1180,margin:"0 auto",padding:"26px 24px 44px",display:"flex",justifyContent:"space-between",color:"var(--muted)",fontSize:13}}><Logo/><span>Deterministic demo • fictional campus data • no AI</span></footer>
-  </main>
+      <section className="landing-section" id="example">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">Example reconciliation</div>
+          <h2 className="landing-h2">Water monitoring tells you what changed. LeakLedger reconciles what cannot be explained.</h2>
+          <div className="landing-two">
+            <div className="landing-compare">
+              <div className="landing-compare-label">Traditional monitoring</div>
+              <div className="landing-compare-quote">&ldquo;Usage increased 18%.&rdquo;</div>
+              <p>Useful context, but it does not prove where the missing water is or whether a repair succeeded.</p>
+            </div>
+            <div className="landing-compare positive">
+              <div className="landing-compare-label">LeakLedger</div>
+              <div className="landing-compare-quote">&ldquo;0.35 m³ remains unexplained inside Hostel B.&rdquo;</div>
+              <p>The conclusion carries its own arithmetic, coverage, completeness and localisation boundary.</p>
+            </div>
+          </div>
+          <div className="panel mt-24">
+            <div className="panel-header">
+              <h2 className="panel-title">Hostel B Main · interval arithmetic</h2>
+              <span className="badge badge-danger"><span className="badge-dot" aria-hidden="true" />Anomalous</span>
+            </div>
+            <div className="panel-body">
+              <div className="equation">
+                <div className="equation-term">
+                  <span className="equation-label">Entered</span>
+                  <span className="equation-value">3.85 m³</span>
+                </div>
+                <div className="equation-op" aria-hidden="true">−</div>
+                <div className="equation-term">
+                  <span className="equation-label">Measured downstream</span>
+                  <span className="equation-value">3.40 m³</span>
+                </div>
+                <div className="equation-op" aria-hidden="true">−</div>
+                <div className="equation-term">
+                  <span className="equation-label">Known unmetered</span>
+                  <span className="equation-value">0.10 m³</span>
+                </div>
+                <div className="equation-op" aria-hidden="true">−</div>
+                <div className="equation-term">
+                  <span className="equation-label">Storage Δ</span>
+                  <span className="equation-value">0.00 m³</span>
+                </div>
+                <div className="equation-op" aria-hidden="true">=</div>
+                <div className="equation-term result is-anomalous">
+                  <span className="equation-label">Unexplained</span>
+                  <span className="equation-value">0.35 m³</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-section" id="failclosed">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">Fail closed by design</div>
+          <h2 className="landing-h2">Missing evidence stops the accusation.</h2>
+          <p className="landing-sub">
+            If a downstream meter disappears, clock alignment fails, a counter resets, or coverage is too low,
+            LeakLedger pauses leak classification instead of turning incomplete observability into a confident alert.
+          </p>
+          <div className="landing-two">
+            <div className="landing-compare">
+              <div className="landing-compare-label">Evidence required</div>
+              <div className="kv mt-12">
+                <div className="kv-row"><span className="kv-key">Downstream coverage</span><span className="kv-value">94%</span></div>
+                <div className="kv-row"><span className="kv-key">Reading completeness</span><span className="kv-value">100%</span></div>
+                <div className="kv-row"><span className="kv-key">Clock alignment</span><span className="kv-value">Valid</span></div>
+              </div>
+            </div>
+            <div className="landing-compare">
+              <div className="landing-compare-label">Evidence lost</div>
+              <div className="kv mt-12">
+                <div className="kv-row"><span className="kv-key">Hostel B Floor 2</span><span className="kv-value text-warning">No reading · 37 min</span></div>
+                <div className="kv-row"><span className="kv-key">Downstream completeness</span><span className="kv-value text-warning">67%</span></div>
+                <div className="kv-row"><span className="kv-key">Evidence</span><span className="kv-value text-warning">Insufficient</span></div>
+              </div>
+              <p className="mt-12">Leak classification is suspended until trustworthy evidence returns.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-section">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">Repair verification</div>
+          <h2 className="landing-h2">A repair report never closes an incident by itself.</h2>
+          <div className="landing-two">
+            <div className="landing-compare">
+              <div className="landing-compare-label">Before repair</div>
+              <div className="landing-compare-quote tabular">0.36 m³ unexplained</div>
+              <p>Persistent anomalous intervals keep the incident open.</p>
+            </div>
+            <div className="landing-compare positive">
+              <div className="landing-compare-label">Verification in progress</div>
+              <div className="landing-compare-quote tabular">Healthy intervals 2 / 3</div>
+              <div className="progress-segments mt-12" aria-hidden="true">
+                <span className="progress-segment done" />
+                <span className="progress-segment done" />
+                <span className="progress-segment active" />
+              </div>
+              <p className="mt-12">Resolution requires distinct valid intervals, not a status change.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-section" id="architecture">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">AWS-native event flow</div>
+          <h2 className="landing-h2">Readings flow through real infrastructure.</h2>
+          <div className="landing-flow">
+            {FLOW.map((node, i) => (
+              <span key={node} style={{ display: "contents" }}>
+                <span className="landing-flow-node">{node}</span>
+                {i < FLOW.length - 1 && <span className="landing-flow-arrow" aria-hidden="true"><ArrowRight size={13} /></span>}
+              </span>
+            ))}
+          </div>
+          <p className="landing-sub mt-24">
+            Structured CloudWatch logs and metrics make duplicates, reconciliation decisions, incidents and repair
+            verification inspectable end to end. X-Ray traces follow each ingestion path.
+          </p>
+        </div>
+      </section>
+
+      <section className="landing-section">
+        <div className="landing-cta">
+          <div>
+            <h2 className="landing-h2" style={{ marginTop: 0 }}>Run the deterministic demo.</h2>
+            <p className="landing-sub">
+              Hidden loss, missing meter, counter reset, successful repair and failed repair scenarios are included.
+            </p>
+          </div>
+          <Link className="btn btn-primary" href="/signin">
+            Open demo <ArrowRight size={15} />
+          </Link>
+        </div>
+      </section>
+
+      <footer className="landing-footer">
+        <div className="landing-footer-inner">
+          <Logo />
+          <span>Deterministic demo · fictional campus data · no AI</span>
+        </div>
+      </footer>
+    </main>
+  );
 }

@@ -44,11 +44,15 @@ class IncidentService:
         if active:
             target = by_id.get(active.node_id)
             if target and target.state in {BalanceState.INSUFFICIENT_DATA, BalanceState.DATA_QUALITY_FAILURE, BalanceState.STALE}:
-                if active.status not in {IncidentStatus.REPAIR_REPORTED, IncidentStatus.VERIFYING}:
-                    if active.status != IncidentStatus.EVIDENCE_INSUFFICIENT:
-                        active.pre_evidence_status = active.status.value
-                    active.status = IncidentStatus.EVIDENCE_INSUFFICIENT
-                    self._event(store, active, "EvidenceInsufficient", "system", target.explanation)
+                if active.status in {IncidentStatus.REPAIR_REPORTED, IncidentStatus.VERIFYING}:
+                    # Verification is in progress: record that this interval could not be
+                    # evaluated instead of silently skipping it.
+                    self._evaluate_verification(store, active, target)
+                    return active
+                if active.status != IncidentStatus.EVIDENCE_INSUFFICIENT:
+                    active.pre_evidence_status = active.status.value
+                active.status = IncidentStatus.EVIDENCE_INSUFFICIENT
+                self._event(store, active, "EvidenceInsufficient", "system", target.explanation)
                 return active
             if target and active.status == IncidentStatus.EVIDENCE_INSUFFICIENT and target.evidence_quality == EvidenceQuality.HIGH:
                 restored = IncidentStatus.INVESTIGATING
@@ -136,6 +140,11 @@ class IncidentService:
 
     def _evaluate_verification(self, store: LocalStore, incident: Incident, target_balance: BalanceResult) -> None:
         if incident.verification_last_interval_end == target_balance.interval_end:
+            return
+        # Only intervals that end after the repair was recorded may count toward the
+        # verification streak; out-of-order delivery must not verify a repair with
+        # pre-repair evidence.
+        if incident.verification_floor_interval_end and target_balance.interval_end <= incident.verification_floor_interval_end:
             return
         if target_balance.evidence_quality != EvidenceQuality.HIGH or target_balance.state in {BalanceState.INSUFFICIENT_DATA, BalanceState.DATA_QUALITY_FAILURE, BalanceState.STALE}:
             self._event(store, incident, "VerificationPaused", "system", "Verification interval ignored because evidence quality is insufficient.")

@@ -33,21 +33,49 @@ class ReconciliationEngine:
     def _parse(ts: str) -> datetime:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
-    def _interval_volume(self, store: LocalStore, meter_id: str) -> tuple[Optional[float], str | None]:
-        readings = store.latest_two(meter_id)
-        if len(readings) < 2:
-            return None, "missing reading pair"
-        before, after = readings
+    @staticmethod
+    def _pair_at(store: LocalStore, meter_id: str, interval_end: str):
+        """Return the (previous, current) readings for the interval ending at interval_end."""
+        rows = store.readings.get(meter_id, [])
+        for i, reading in enumerate(rows):
+            if reading.timestamp == interval_end:
+                return (rows[i - 1], reading) if i >= 1 else None
+        return None
+
+    @staticmethod
+    def _reading_at(store: LocalStore, meter_id: str, interval_end: str):
+        for reading in store.readings.get(meter_id, []):
+            if reading.timestamp == interval_end:
+                return reading
+        return None
+
+    def _interval_volume(self, store: LocalStore, meter_id: str, interval_end: str | None = None) -> tuple[Optional[float], str | None]:
+        if interval_end is not None:
+            pair = self._pair_at(store, meter_id, interval_end)
+            if pair is None:
+                return None, "missing reading pair"
+            before, after = pair
+        else:
+            readings = store.latest_two(meter_id)
+            if len(readings) < 2:
+                return None, "missing reading pair"
+            before, after = readings
         delta = after.cumulative_m3 - before.cumulative_m3
         if delta < -1e-9:
             return None, "counter reset detected"
         return delta, None
 
-    def reconcile_node(self, store: LocalStore, node: MeterNode) -> BalanceResult:
-        latest = store.latest(node.id)
-        previous = store.latest_two(node.id)
-        now_ts = latest.timestamp if latest else datetime.now(timezone.utc).isoformat()
-        start_ts = previous[0].timestamp if len(previous) == 2 else now_ts
+    def reconcile_node(self, store: LocalStore, node: MeterNode, interval_end: str | None = None) -> BalanceResult:
+        if interval_end is not None:
+            pair = self._pair_at(store, node.id, interval_end)
+            latest = self._reading_at(store, node.id, interval_end)
+            now_ts = interval_end
+            start_ts = pair[0].timestamp if pair else interval_end
+        else:
+            latest = store.latest(node.id)
+            previous = store.latest_two(node.id)
+            now_ts = latest.timestamp if latest else datetime.now(timezone.utc).isoformat()
+            start_ts = previous[0].timestamp if len(previous) == 2 else now_ts
 
         if node.kind == NodeKind.UNMETERED:
             return BalanceResult(
@@ -69,14 +97,14 @@ class ReconciliationEngine:
                 explanation="This branch is explicitly modelled as unmetered and is never treated as unexplained loss.",
             )
 
-        inflow, parent_err = self._interval_volume(store, node.id)
+        inflow, parent_err = self._interval_volume(store, node.id, interval_end)
         child_nodes = children(store.nodes, node.id)
         measured_children = [c for c in child_nodes if c.kind == NodeKind.METER]
         unmetered_children = [c for c in child_nodes if c.kind == NodeKind.UNMETERED]
 
         # A terminal meter represents accounted end-use. It has no downstream boundary to reconcile.
         if not child_nodes:
-            terminal_volume, terminal_err = self._interval_volume(store, node.id)
+            terminal_volume, terminal_err = self._interval_volume(store, node.id, interval_end)
             if terminal_err:
                 return BalanceResult(
                     node_id=node.id, interval_start=start_ts, interval_end=now_ts,
@@ -108,13 +136,14 @@ class ReconciliationEngine:
         child_errors: list[str] = []
         child_latest_times: list[datetime] = []
         for child in measured_children:
-            volume, err = self._interval_volume(store, child.id)
+            volume, err = self._interval_volume(store, child.id, interval_end)
             if err:
                 child_errors.append(f"{child.label}: {err}")
             else:
                 child_volumes.append(volume or 0.0)
-                if store.latest(child.id):
-                    child_latest_times.append(self._parse(store.latest(child.id).timestamp))
+                child_reading = self._reading_at(store, child.id, interval_end) if interval_end is not None else store.latest(child.id)
+                if child_reading:
+                    child_latest_times.append(self._parse(child_reading.timestamp))
 
         completeness = 1.0
         required_count = 1 + len(measured_children)
@@ -137,9 +166,13 @@ class ReconciliationEngine:
             alignment_valid = max_skew <= self.config.alignment_tolerance_seconds
 
         # Freshness is measured against the newest observation in the site rather than wall-clock time.
-        # This keeps historical replays deterministic while still detecting a meter lagging the rest of the system.
-        site_latest_times = [self._parse(r[-1].timestamp) for r in store.readings.values() if r]
-        reference_time = max(site_latest_times) if site_latest_times else (self._parse(latest.timestamp) if latest else datetime.now(timezone.utc))
+        # When reconciling a specific historical interval, freshness is measured against that
+        # interval so out-of-order processing cannot mark a valid interval as stale.
+        if interval_end is not None:
+            reference_time = self._parse(interval_end)
+        else:
+            site_latest_times = [self._parse(r[-1].timestamp) for r in store.readings.values() if r]
+            reference_time = max(site_latest_times) if site_latest_times else (self._parse(latest.timestamp) if latest else datetime.now(timezone.utc))
         freshness_seconds = 0.0
         if latest:
             freshness_seconds = max(0.0, (reference_time - self._parse(latest.timestamp)).total_seconds())
@@ -205,16 +238,21 @@ class ReconciliationEngine:
             explanation=explanation,
         )
 
-    def reconcile_all(self, store: LocalStore, require_reading_pairs: bool = False) -> list[BalanceResult]:
+    def reconcile_all(self, store: LocalStore, require_reading_pairs: bool = False, interval_end: str | None = None) -> list[BalanceResult]:
         results = []
         for node in store.nodes.values():
             if node.kind == NodeKind.METER:
                 # In the event-driven runtime a batch may only contain a subset of
-                # sibling meters. Nodes that cannot yet form an interval are skipped
-                # so a wall-clock placeholder balance is never persisted as "latest".
-                if require_reading_pairs and len(store.latest_two(node.id)) < 2:
-                    continue
-                result = self.reconcile_node(store, node)
+                # sibling meters, and bursts can deliver several intervals at once.
+                # Reconciling a specific interval keeps every physical interval
+                # evaluated exactly once, regardless of processing order.
+                if require_reading_pairs:
+                    if interval_end is not None:
+                        if self._pair_at(store, node.id, interval_end) is None:
+                            continue
+                    elif len(store.latest_two(node.id)) < 2:
+                        continue
+                result = self.reconcile_node(store, node, interval_end)
                 results.append(result)
         store.balances.extend(results)
         return results
