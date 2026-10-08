@@ -3,15 +3,18 @@ from __future__ import annotations
 import csv
 import io
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.aws.runtime import AwsRuntime, engine_for
+from app.aws.runtime import AwsRuntime, engine_for, site_write_lock
 from app.domain.models import AuditEvent, MeterReading, NodeKind, RepairAction, SiteSettings, to_dict
 from app.repositories.memory import LocalStore
 from app.services.incidents import IncidentService
@@ -24,6 +27,36 @@ MODE = os.getenv("LEAKLEDGER_MODE", "local").lower()
 SITE_ID = "northbridge"
 SITE_NAME = "Northbridge University Campus"
 
+SERVE_FRONTEND = os.getenv("LEAKLEDGER_SERVE_FRONTEND", "").lower() in {"1", "true", "yes"}
+FRONTEND_DIR = Path(os.getenv(
+    "FRONTEND_DIR",
+    str(Path(__file__).resolve().parent.parent / "frontend_static"),
+))
+
+
+class StripApiPrefixMiddleware:
+    """Serve API paths both with and without the CloudFront `/api` prefix.
+
+    CloudFront strips `/api` before forwarding. When the static frontend is
+    served directly through API Gateway (CloudFront disabled), requests arrive
+    as `/api/...`, so the same routes must also resolve after stripping.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path == "/api" or path.startswith("/api/"):
+                new_path = path[4:] or "/"
+                scope = dict(scope)
+                scope["path"] = new_path
+                if scope.get("raw_path"):
+                    scope["raw_path"] = new_path.encode("utf-8")
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="LeakLedger API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -32,6 +65,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(StripApiPrefixMiddleware)
 
 store = LocalStore(nodes=seed_nodes())
 engine = engine_for(store.settings)
@@ -186,6 +220,19 @@ def ingest_one_local(reading: MeterReading) -> dict[str, Any]:
 def persist_aws_store(s: LocalStore) -> None:
     assert aws_runtime is not None
     aws_runtime.repository.save_store(s, SITE_ID)
+
+
+@contextmanager
+def aws_write_lock():
+    """Serialize API mutations with the reconciliation worker on the AWS runtime."""
+    if MODE != "aws" or aws_runtime is None:
+        yield
+        return
+    try:
+        with site_write_lock(aws_runtime, SITE_ID, attempts=20, wait_seconds=0.25):
+            yield
+    except TimeoutError as exc:
+        raise HTTPException(503, "Site reconciliation is busy; retry shortly.") from exc
 
 
 @app.get("/health")
@@ -378,18 +425,19 @@ def incident(incident_id: str):
 
 
 def _transition(incident_id: str, action: str, actor: str):
-    s = current_store()
-    if incident_id not in s.incidents:
-        raise HTTPException(404, "Incident not found")
-    service = service_for(s)
-    try:
-        result = service.transition(s, incident_id, action, actor)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    if MODE == "aws":
-        persist_aws_store(s)
-        assert aws_runtime is not None
-        aws_runtime.events.publish_domain_event("IncidentStateChanged", SITE_ID, {"incident_id": incident_id, "status": result.status.value, "actor": actor})
+    with aws_write_lock():
+        s = current_store()
+        if incident_id not in s.incidents:
+            raise HTTPException(404, "Incident not found")
+        service = service_for(s)
+        try:
+            result = service.transition(s, incident_id, action, actor)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if MODE == "aws":
+            persist_aws_store(s)
+            assert aws_runtime is not None
+            aws_runtime.events.publish_domain_event("IncidentStateChanged", SITE_ID, {"incident_id": incident_id, "status": result.status.value, "actor": actor})
     return to_dict(result)
 
 
@@ -405,23 +453,24 @@ def investigate(incident_id: str, body: ActorIn):
 
 @app.post("/incidents/{incident_id}/repair")
 def repair(incident_id: str, body: RepairIn):
-    s = current_store()
-    if incident_id not in s.incidents:
-        raise HTTPException(404, "Incident not found")
-    service = service_for(s)
-    try:
-        action = RepairAction(
-            timestamp=datetime.now(timezone.utc).isoformat(), actor=body.actor, repair_type=body.repair_type,
-            location=body.location, notes=body.notes, cost=body.cost, cause=body.cause,
-        )
-        result = service.record_repair(s, incident_id, action)
-        result.verification_required_intervals = s.settings.verification_required_intervals
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    if MODE == "aws":
-        persist_aws_store(s)
-        assert aws_runtime is not None
-        aws_runtime.events.publish_domain_event("RepairReported", SITE_ID, {"incident_id": incident_id, "actor": body.actor})
+    with aws_write_lock():
+        s = current_store()
+        if incident_id not in s.incidents:
+            raise HTTPException(404, "Incident not found")
+        service = service_for(s)
+        try:
+            action = RepairAction(
+                timestamp=datetime.now(timezone.utc).isoformat(), actor=body.actor, repair_type=body.repair_type,
+                location=body.location, notes=body.notes, cost=body.cost, cause=body.cause,
+            )
+            result = service.record_repair(s, incident_id, action)
+            result.verification_required_intervals = s.settings.verification_required_intervals
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if MODE == "aws":
+            persist_aws_store(s)
+            assert aws_runtime is not None
+            aws_runtime.events.publish_domain_event("RepairReported", SITE_ID, {"incident_id": incident_id, "actor": body.actor})
     return to_dict(result)
 
 
@@ -443,18 +492,19 @@ def audit(site_id: str, limit: int = 250):
 @app.put("/sites/{site_id}/topology/{node_id}")
 def update_node_config(site_id: str, node_id: str, body: NodeConfigIn):
     validate_site(site_id)
-    s = current_store()
-    if node_id not in s.nodes:
-        raise HTTPException(404, "Topology node not found")
-    node = s.nodes[node_id]
-    node.expected_interval_minutes = body.expected_interval_minutes
-    node.known_unmetered_m3_per_interval = body.known_unmetered_m3_per_interval
-    node.buffered = body.buffered
-    node.storage_capacity_m3 = body.storage_capacity_m3
-    node.storage_change_m3_per_interval = body.storage_change_m3_per_interval
-    node.active = body.active
-    if MODE == "aws":
-        persist_aws_store(s)
+    with aws_write_lock():
+        s = current_store()
+        if node_id not in s.nodes:
+            raise HTTPException(404, "Topology node not found")
+        node = s.nodes[node_id]
+        node.expected_interval_minutes = body.expected_interval_minutes
+        node.known_unmetered_m3_per_interval = body.known_unmetered_m3_per_interval
+        node.buffered = body.buffered
+        node.storage_capacity_m3 = body.storage_capacity_m3
+        node.storage_change_m3_per_interval = body.storage_change_m3_per_interval
+        node.active = body.active
+        if MODE == "aws":
+            persist_aws_store(s)
     return to_dict(node)
 
 
@@ -470,12 +520,13 @@ def put_settings(site_id: str, body: SettingsIn):
     settings = SiteSettings(**body.model_dump())
     if MODE == "aws":
         assert aws_runtime is not None
-        aws_runtime.repository.save_settings(site_id, settings)
-        s = aws_runtime.repository.load_store(site_id)
-        s.settings = settings
-        for item in s.incidents.values():
-            item.verification_required_intervals = settings.verification_required_intervals
-        aws_runtime.repository.save_store(s, site_id)
+        with aws_write_lock():
+            aws_runtime.repository.save_settings(site_id, settings)
+            s = aws_runtime.repository.load_store(site_id)
+            s.settings = settings
+            for item in s.incidents.values():
+                item.verification_required_intervals = settings.verification_required_intervals
+            aws_runtime.repository.save_store(s, site_id)
     else:
         store.settings = settings
         for item in store.incidents.values():
@@ -611,3 +662,9 @@ def demo_validation():
     results.append({"name": "Failed repair", "passed": incident.status.value == "REPAIR_FAILED", "detail": f"Final state {incident.status.value}; incident was not falsely closed."})
 
     return {"passed": all(x["passed"] for x in results), "results": results, "note": "Controlled deterministic simulations; not real-world detection accuracy."}
+
+
+# When CloudFront is unavailable (for example on AWS accounts pending CloudFront
+# verification), the same static export is served by this Lambda through API Gateway.
+if SERVE_FRONTEND and FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

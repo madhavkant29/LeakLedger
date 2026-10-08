@@ -103,4 +103,18 @@ npm run synth
 
 ## Deployment status
 
-**Not deployed.** No AWS resources were created or modified from this packaging environment. That is the intentionally remaining step requested by the user.
+**Deployed and verified in AWS** (account `4736xxxxxxxx`, region `ap-south-1`, stack `LeakLedgerStack`).
+
+- Backend suite: `22 passed`.
+- Frontend: dependency-backed `next build` static export passes; all routes load directly from the public URL.
+- Infrastructure: `tsc`, `cdk synth`, reviewed `cdk diff` (additions limited to `LeakLedgerStack`), deploy succeeded.
+- Production end-to-end (through API Gateway/Lambda/S3/EventBridge/SQS/DynamoDB):
+  - hidden leak opens an incident at `HOSTEL-B-MAIN` with 0.350 m³ unexplained and `HIGH` evidence,
+  - missing meter after the incident fails closed as `EVIDENCE_INSUFFICIENT`,
+  - repair report enters `VERIFYING` and resolves only after 3 distinct healthy intervals,
+  - failed repair becomes `REPAIR_FAILED`,
+  - duplicate `event_id` submissions are counted once,
+  - CloudWatch metrics, dashboard, logs, SQS/DLQ health and X-Ray traces confirmed.
+- CloudFront: the account currently returns `Your account must be verified before you can add new CloudFront resources`, so the stack is deployed with `"leakledger:cloudfront": "false"` and serves the identical static frontend through API Gateway on one public HTTPS URL. Set the flag to `true` (default) after AWS verifies the account and redeploy to switch to CloudFront.
+
+See `docs/DEPLOYMENT.md` for the full deployment report.

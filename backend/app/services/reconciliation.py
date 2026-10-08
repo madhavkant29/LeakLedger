@@ -205,10 +205,15 @@ class ReconciliationEngine:
             explanation=explanation,
         )
 
-    def reconcile_all(self, store: LocalStore) -> list[BalanceResult]:
+    def reconcile_all(self, store: LocalStore, require_reading_pairs: bool = False) -> list[BalanceResult]:
         results = []
         for node in store.nodes.values():
             if node.kind == NodeKind.METER:
+                # In the event-driven runtime a batch may only contain a subset of
+                # sibling meters. Nodes that cannot yet form an interval are skipped
+                # so a wall-clock placeholder balance is never persisted as "latest".
+                if require_reading_pairs and len(store.latest_two(node.id)) < 2:
+                    continue
                 result = self.reconcile_node(store, node)
                 results.append(result)
         store.balances.extend(results)

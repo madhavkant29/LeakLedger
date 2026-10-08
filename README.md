@@ -450,6 +450,15 @@ npm run synth
 npm run deploy
 ```
 
+### Frontend edge modes
+
+`infrastructure/cdk.json` controls how the static export is served:
+
+- `"leakledger:cloudfront": "true"` (default) — private S3 + CloudFront distribution with the `/api/*` rewrite, as designed above.
+- `"leakledger:cloudfront": "false"` — the same static export is bundled into the API Lambda and served through API Gateway on one public HTTPS URL. This is used when the AWS account is still pending CloudFront verification and cannot create distributions. API paths work both with and without the `/api` prefix.
+
+Flip the flag (or remove it to use the default) and redeploy once the account can create CloudFront resources.
+
 No AWS account IDs, credentials or application secrets are committed.
 
 ## Environment variables
@@ -479,7 +488,7 @@ LeakLedger deliberately does not claim more than the available instrumentation c
 - It identifies the deepest trustworthy inspection boundary, not the exact physical crack in a pipe.
 - It does not replace acoustic, pressure or professional physical leak inspection.
 - Controlled simulation results are not real-world sensitivity/specificity measurements.
-- This package includes deployment-ready source and infrastructure, but **no AWS deployment was executed from the packaging environment**.
+- The current production deployment runs on the API-Gateway-hosted frontend path because the deployment account is pending CloudFront verification; the CloudFront stack path remains available via `leakledger:cloudfront=true`.
 
 ## No-AI declaration
 

@@ -9,3 +9,4 @@ dist/
 *.pyc
 .DS_Store
 cdk.out/
+frontend/out/

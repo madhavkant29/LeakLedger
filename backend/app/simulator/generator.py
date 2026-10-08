@@ -39,6 +39,7 @@ def generate_snapshot(
     counters: dict[str, float],
     repair_reported: bool = False,
     site_id: str = "northbridge",
+    generation: str = "",
 ) -> Snapshot:
     counters = dict(counters)
     leaf = dict(BASE_INTERVAL_M3)
@@ -70,7 +71,7 @@ def generate_snapshot(
         else:
             counters[meter_id] = counters.get(meter_id, 100.0) + flow
         readings.append(MeterReading(
-            event_id=f"demo-{scenario}-{step}-{meter_id}",
+            event_id=f"demo-{generation + '-' if generation else ''}{scenario}-{step}-{meter_id}",
             meter_id=meter_id,
             timestamp=demo_timestamp(step),
             cumulative_m3=round(counters[meter_id], 6),

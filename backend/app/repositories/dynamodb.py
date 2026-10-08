@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import defaultdict
 from dataclasses import asdict
 from decimal import Decimal
@@ -33,6 +34,9 @@ def _json_default(value: Any):
     if isinstance(value, Decimal):
         return float(value)
     raise TypeError(type(value).__name__)
+
+
+LOCK_SK = "STATE#WRITE_LOCK"
 
 
 def _payload(value: Any) -> str:
@@ -89,6 +93,7 @@ def _incident(d: dict[str, Any]) -> Incident:
         pre_repair_residual_rate=d.get("pre_repair_residual_rate"),
         post_repair_residuals=[float(x) for x in d.get("post_repair_residuals", [])],
         verification_last_interval_end=d.get("verification_last_interval_end"),
+        pre_evidence_status=d.get("pre_evidence_status"),
     )
 
 
@@ -110,6 +115,10 @@ class DynamoDbStateRepository:
     The domain engine remains cloud-agnostic: this adapter materializes a LocalStore,
     then persists the resulting readings, balances, incidents and audit events.
     """
+
+    # A claimed-but-unfinished event may only be re-claimed after this many seconds.
+    # Must exceed the Lambda timeout (60s) and stay below the SQS visibility timeout (90s).
+    CLAIM_STALE_SECONDS = 75
 
     def __init__(self, table_name: str, region_name: str | None = None, table=None):
         self.table = table or boto3.resource("dynamodb", region_name=region_name).Table(table_name)
@@ -140,7 +149,11 @@ class DynamoDbStateRepository:
 
     def _all_items(self, site_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
-        kwargs: dict[str, Any] = {"KeyConditionExpression": "pk = :pk", "ExpressionAttributeValues": {":pk": self.pk(site_id)}}
+        kwargs: dict[str, Any] = {
+            "KeyConditionExpression": "pk = :pk",
+            "ExpressionAttributeValues": {":pk": self.pk(site_id)},
+            "ConsistentRead": True,
+        }
         while True:
             response = self.table.query(**kwargs)
             items.extend(response.get("Items", []))
@@ -262,10 +275,26 @@ class DynamoDbStateRepository:
                 })
 
     def claim_event(self, site_id: str, event_id: str) -> bool:
+        now = int(time.time())
         try:
             self.table.put_item(
-                Item={"pk": self.pk(site_id), "sk": f"IDEMPOTENCY#{event_id}", "entity": "IDEMPOTENCY", "status": "PROCESSING", "payload": "{}"},
-                ConditionExpression="attribute_not_exists(sk)",
+                Item={
+                    "pk": self.pk(site_id),
+                    "sk": f"IDEMPOTENCY#{event_id}",
+                    "entity": "IDEMPOTENCY",
+                    "status": "PROCESSING",
+                    "claimed_at": Decimal(now),
+                    "payload": "{}",
+                },
+                ConditionExpression=(
+                    "attribute_not_exists(sk) OR "
+                    "(#status = :processing AND (attribute_not_exists(claimed_at) OR claimed_at < :stale))"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":processing": "PROCESSING",
+                    ":stale": Decimal(now - self.CLAIM_STALE_SECONDS),
+                },
             )
             return True
         except ClientError as exc:
@@ -288,6 +317,43 @@ class DynamoDbStateRepository:
         response = self.table.get_item(Key={"pk": self.pk(site_id), "sk": f"IDEMPOTENCY#{event_id}"}, ConsistentRead=True)
         return response.get("Item", {}).get("status") == "DONE"
 
+    def acquire_write_lock(self, site_id: str, owner: str, ttl_seconds: int = 120, attempts: int = 1, wait_seconds: float = 0.25) -> bool:
+        """Acquire the per-site mutation lock so load-modify-save updates cannot race."""
+        now = time.time()
+        for attempt in range(max(1, attempts)):
+            try:
+                self.table.put_item(
+                    Item={
+                        "pk": self.pk(site_id),
+                        "sk": LOCK_SK,
+                        "entity": "LOCK",
+                        "owner": owner,
+                        "expires_at": Decimal(int(now + ttl_seconds)),
+                    },
+                    ConditionExpression="attribute_not_exists(sk) OR expires_at < :now",
+                    ExpressionAttributeValues={":now": Decimal(int(now))},
+                )
+                return True
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
+                if attempt + 1 < max(1, attempts):
+                    time.sleep(wait_seconds)
+                    now = time.time()
+        return False
+
+    def release_write_lock(self, site_id: str, owner: str) -> None:
+        try:
+            self.table.delete_item(
+                Key={"pk": self.pk(site_id), "sk": LOCK_SK},
+                ConditionExpression="#owner = :owner",
+                ExpressionAttributeNames={"#owner": "owner"},
+                ExpressionAttributeValues={":owner": owner},
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+
     def save_settings(self, site_id: str, settings: SiteSettings) -> None:
         self.table.put_item(Item={"pk": self.pk(site_id), "sk": "CONFIG#SETTINGS", "entity": "CONFIG", "payload": _payload(settings)})
 
@@ -302,10 +368,14 @@ class DynamoDbStateRepository:
     def clear_operational_state(self, site_id: str = "northbridge") -> None:
         pk = self.pk(site_id)
         items = self._all_items(site_id)
-        keep = ("NODE#", "CONFIG#")
+        # Topology, settings and idempotency claims are preserved across demo resets:
+        # keeping claims prevents in-flight messages from a previous generation being
+        # replayed into the new run, while generation-tagged demo event ids keep the
+        # same scenario replayable.
+        keep_prefixes = ("NODE#", "CONFIG#", "IDEMPOTENCY#")
         with self.table.batch_writer() as batch:
             for item in items:
                 sk = item["sk"]
-                if sk.startswith(keep):
+                if sk.startswith(keep_prefixes) or sk == LOCK_SK:
                     continue
                 batch.delete_item(Key={"pk": pk, "sk": sk})

@@ -45,12 +45,18 @@ class IncidentService:
             target = by_id.get(active.node_id)
             if target and target.state in {BalanceState.INSUFFICIENT_DATA, BalanceState.DATA_QUALITY_FAILURE, BalanceState.STALE}:
                 if active.status not in {IncidentStatus.REPAIR_REPORTED, IncidentStatus.VERIFYING}:
+                    if active.status != IncidentStatus.EVIDENCE_INSUFFICIENT:
+                        active.pre_evidence_status = active.status.value
                     active.status = IncidentStatus.EVIDENCE_INSUFFICIENT
                     self._event(store, active, "EvidenceInsufficient", "system", target.explanation)
                 return active
             if target and active.status == IncidentStatus.EVIDENCE_INSUFFICIENT and target.evidence_quality == EvidenceQuality.HIGH:
-                active.status = IncidentStatus.INVESTIGATING
-                detail = "Valid readings restored; investigation resumed."
+                restored = IncidentStatus.INVESTIGATING
+                if active.pre_evidence_status in {IncidentStatus.OPEN.value, IncidentStatus.ACKNOWLEDGED.value, IncidentStatus.INVESTIGATING.value}:
+                    restored = IncidentStatus(active.pre_evidence_status)
+                active.pre_evidence_status = None
+                active.status = restored
+                detail = f"Valid readings restored; incident returned to {restored.value}."
                 if target.state == BalanceState.BALANCED:
                     detail += " Current balance is healthy, but the open incident still requires an explicit repair/verification lifecycle or operator disposition."
                 self._event(store, active, "EvidenceRestored", "system", detail)

@@ -57,12 +57,18 @@ export class LeakLedgerStack extends cdk.Stack {
 
     const projectRoot = path.join(__dirname, '..', '..');
     const codePath = path.join(projectRoot, 'dist', 'lambda');
+    // CloudFront is the intended edge for the static frontend. AWS accounts that
+    // are still pending CloudFront verification cannot create distributions, so the
+    // stack can serve the same static export directly through API Gateway instead.
+    // Disable CloudFront with `-c leakledger:cloudfront=false` (see infrastructure/cdk.json).
+    const enableCloudFront = (this.node.tryGetContext('leakledger:cloudfront') ?? 'true') !== 'false';
     const commonEnv = {
       LEAKLEDGER_MODE: 'aws',
       STATE_TABLE: stateTable.tableName,
       RAW_BUCKET: rawArchive.bucketName,
       EVENT_BUS: bus.eventBusName,
       POWERTOOLS_SERVICE_NAME: 'leakledger',
+      LEAKLEDGER_SERVE_FRONTEND: enableCloudFront ? '0' : '1',
     };
 
     const apiFn = new lambda.Function(this, 'ApiFunction', {
@@ -91,6 +97,8 @@ export class LeakLedgerStack extends cdk.Stack {
       batchSize: 10,
       maxBatchingWindow: cdk.Duration.seconds(2),
       reportBatchItemFailures: true,
+      // Keep sibling meter events batched together and reduce interval reordering.
+      maxConcurrency: 2,
     }));
 
     stateTable.grantReadWriteData(apiFn);
@@ -120,14 +128,16 @@ export class LeakLedgerStack extends cdk.Stack {
     httpApi.addRoutes({ path: '/', methods: [apigwv2.HttpMethod.ANY], integration: apiIntegration });
 
     // Static Next.js export. Run `make build-artifacts` before `cdk deploy`.
-    const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
-      encryption: s3.BucketEncryption.S3_MANAGED,
-      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true,
-    });
-    const staticRouteRewrite = new cloudfront.Function(this, 'StaticRouteRewrite', {
-      code: cloudfront.FunctionCode.fromInline(`
+    let frontendUrl = httpApi.apiEndpoint || '';
+    if (enableCloudFront) {
+      const frontendBucket = new s3.Bucket(this, 'FrontendBucket', {
+        encryption: s3.BucketEncryption.S3_MANAGED,
+        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+      });
+      const staticRouteRewrite = new cloudfront.Function(this, 'StaticRouteRewrite', {
+        code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var request = event.request;
   var uri = request.uri;
@@ -138,42 +148,44 @@ function handler(event) {
   }
   return request;
 }`),
-    });
-    const stripApiPrefix = new cloudfront.Function(this, 'StripApiPrefix', {
-      code: cloudfront.FunctionCode.fromInline(`
+      });
+      const stripApiPrefix = new cloudfront.Function(this, 'StripApiPrefix', {
+        code: cloudfront.FunctionCode.fromInline(`
 function handler(event) {
   var request = event.request;
   request.uri = request.uri.slice(4) || '/';
   return request;
 }`),
-    });
-    const apiDomain = cdk.Fn.select(2, cdk.Fn.split('/', httpApi.apiEndpoint));
-    const distribution = new cloudfront.Distribution(this, 'FrontendDistribution', {
-      defaultRootObject: 'index.html',
-      defaultBehavior: {
-        origin: new origins.S3Origin(frontendBucket),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        compress: true,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        functionAssociations: [{ function: staticRouteRewrite, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
-      },
-      additionalBehaviors: {
-        'api/*': {
-          origin: new origins.HttpOrigin(apiDomain, { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY }),
+      });
+      const apiDomain = cdk.Fn.select(2, cdk.Fn.split('/', httpApi.apiEndpoint));
+      const distribution = new cloudfront.Distribution(this, 'FrontendDistribution', {
+        defaultRootObject: 'index.html',
+        defaultBehavior: {
+          origin: new origins.S3Origin(frontendBucket),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-          functionAssociations: [{ function: stripApiPrefix, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+          compress: true,
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          functionAssociations: [{ function: staticRouteRewrite, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
         },
-      },
-    });
-    new s3deploy.BucketDeployment(this, 'DeployFrontend', {
-      sources: [s3deploy.Source.asset(path.join(projectRoot, 'dist', 'frontend'))],
-      destinationBucket: frontendBucket,
-      distribution,
-      distributionPaths: ['/*'],
-    });
+        additionalBehaviors: {
+          'api/*': {
+            origin: new origins.HttpOrigin(apiDomain, { protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY }),
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            functionAssociations: [{ function: stripApiPrefix, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }],
+          },
+        },
+      });
+      new s3deploy.BucketDeployment(this, 'DeployFrontend', {
+        sources: [s3deploy.Source.asset(path.join(projectRoot, 'dist', 'frontend'))],
+        destinationBucket: frontendBucket,
+        distribution,
+        distributionPaths: ['/*'],
+      });
+      frontendUrl = `https://${distribution.domainName}`;
+    }
 
     const dashboard = new cloudwatch.Dashboard(this, 'OperationsDashboard', {
       dashboardName: `${cdk.Stack.of(this).stackName}-operations`,
@@ -201,7 +213,8 @@ function handler(event) {
     });
 
     new cdk.CfnOutput(this, 'ApiUrl', { value: httpApi.url || '' });
-    new cdk.CfnOutput(this, 'FrontendUrl', { value: `https://${distribution.domainName}` });
+    new cdk.CfnOutput(this, 'FrontendUrl', { value: frontendUrl });
+    new cdk.CfnOutput(this, 'FrontendMode', { value: enableCloudFront ? 'cloudfront' : 'api-gateway' });
     new cdk.CfnOutput(this, 'RawArchiveBucket', { value: rawArchive.bucketName });
     new cdk.CfnOutput(this, 'StateTableName', { value: stateTable.tableName });
     new cdk.CfnOutput(this, 'EventBusName', { value: bus.eventBusName });
