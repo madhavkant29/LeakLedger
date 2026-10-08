@@ -1,0 +1,21 @@
+{
+  "name": "leakledger-infrastructure",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.173.4",
+    "constructs": "10.4.2",
+    "source-map-support": "0.5.21"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.173.4",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2",
+    "ts-node": "10.9.2"
+  }
+}
