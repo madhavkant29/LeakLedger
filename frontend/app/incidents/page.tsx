@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent } from "react";
+import { AlertTriangle } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Status } from "@/components/Status";
-import { Banner, EmptyState, ErrorState, Panel, SegmentedProgress, SkeletonRows, Tabs } from "@/components/ui";
-import { api, fmt, fmtDateTime, fmtPct, timeAgo } from "@/lib/api";
+import { Banner, EmptyState, ErrorState, Panel, SkeletonRows, Tabs } from "@/components/ui";
+import { api, fmt, fmtDateTime, fmtInt, fmtPct, timeAgo } from "@/lib/api";
+import { projectedIfSustained } from "@/lib/impact";
 import { getUser } from "@/lib/user";
-import type { Balance, Incident, TopologyResponse } from "@/lib/types";
+import type { Balance, Incident, TopologyNode, TopologyResponse } from "@/lib/types";
 
 type Filter = "ALL" | "ACTIVE" | "INVESTIGATING" | "VERIFYING" | "RESOLVED" | "EVIDENCE";
 
@@ -31,6 +33,7 @@ function Inline({ label, value }: { label: string; value: string }) {
 export default function Incidents() {
   const [rows, setRows] = useState<Incident[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
+  const [nodes, setNodes] = useState<TopologyNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("ACTIVE");
   const [error, setError] = useState("");
@@ -53,6 +56,7 @@ export default function Incidents() {
       ]);
       setRows(incidents);
       setLabels(Object.fromEntries(topology.nodes.map((n) => [n.id, n.label])));
+      setNodes(topology.nodes);
       setSelectedId((prev) => (prev && incidents.some((x) => x.id === prev) ? prev : incidents[0]?.id ?? null));
       setError("");
     } catch (e) {
@@ -202,6 +206,7 @@ export default function Incidents() {
             <IncidentDetail
               incident={selected}
               label={label}
+              nodes={nodes}
               busy={busy}
               showRepair={showRepair}
               repair={repair}
@@ -227,6 +232,7 @@ export default function Incidents() {
 function IncidentDetail({
   incident,
   label,
+  nodes,
   busy,
   showRepair,
   repair,
@@ -237,6 +243,7 @@ function IncidentDetail({
 }: {
   incident: Incident;
   label: (id?: string | null) => string;
+  nodes: TopologyNode[];
   busy: boolean;
   showRepair: boolean;
   repair: { repair_type: string; location: string; notes: string; cause: string; cost: string };
@@ -252,6 +259,39 @@ function IncidentDetail({
   const canRepair = !REPAIR_DISABLED.includes(incident.status);
   const repairDisabledReason = canRepair ? undefined : "Available before verification starts";
   const actor = typeof window !== "undefined" ? getUser().name : "Demo user";
+
+  const showPausePanel = incident.status === "EVIDENCE_INSUFFICIENT";
+  const balanceSuspended = b
+    ? ["INSUFFICIENT_DATA", "DATA_QUALITY_FAILURE", "STALE"].includes(b.state)
+    : false;
+  const pauseReason =
+    [...incident.events].reverse().find((e) => e.event_type === "EvidenceInsufficient")?.detail ??
+    b?.explanation ??
+    "Required downstream meter evidence is no longer available.";
+  const projection =
+    b && b.state === "ANOMALOUS" ? projectedIfSustained(b.residual_m3, b.interval_start, b.interval_end) : null;
+
+  const children = nodes.filter((n) => n.parent_id === incident.node_id);
+  const unmeteredChildren = children.filter((c) => c.kind === "UNMETERED");
+  const meteredChildren = children.filter((c) => c.kind === "METER");
+  const operatorFocus = unmeteredChildren.length
+    ? `Common distribution between ${label(incident.node_id)} and ${
+        meteredChildren.map((c) => c.label).join(", ") || "its downstream branches"
+      } — ${unmeteredChildren.map((c) => c.label).join(", ")} cannot be measured.`
+    : `Downstream branches and common distribution below ${label(incident.node_id)}.`;
+
+  const verifyResolved = incident.status === "RESOLVED";
+  const verifyFailed = incident.status === "REPAIR_FAILED";
+  const verifyHeadline = verifyResolved
+    ? "Repair verified"
+    : verifyFailed
+      ? "Repair failed"
+      : "Repair reported — verification required";
+  const verifyTone = verifyResolved ? "ok" : verifyFailed ? "failed" : "warn";
+  const lastPostRepair =
+    incident.post_repair_residuals.length > 0
+      ? incident.post_repair_residuals[incident.post_repair_residuals.length - 1]
+      : null;
 
   const primaryAction =
     incident.status === "OPEN"
@@ -284,7 +324,26 @@ function IncidentDetail({
         <div className="section-header" style={{ margin: "0 0 10px" }}>
           <h3 className="section-title">Why this incident exists</h3>
         </div>
-        {b ? (
+        {showPausePanel ? (
+          <div className="failclosed-panel" role="status">
+            <div className="failclosed-title">
+              <AlertTriangle size={15} aria-hidden="true" />
+              Evidence insufficient — leak localisation paused
+            </div>
+            <p>
+              <strong>Reason:</strong> {pauseReason}
+            </p>
+            <p>
+              LeakLedger will not make a stronger location claim until downstream observability is restored. The
+              incident stays open and the boundary below is the last trustworthy position, not a new finding.
+            </p>
+            <div className="expand-grid mt-16">
+              <Inline label="Basis of the original claim" value={`${fmt(incident.residual_m3)} m³ unexplained`} />
+              <Inline label="Persistence at opening" value={`${incident.persistence_count} intervals`} />
+              <Inline label="Evidence at opening" value={incident.evidence_quality} />
+            </div>
+          </div>
+        ) : b ? (
           <>
             <div className="equation stacked">
               <div className="equation-term">
@@ -319,6 +378,22 @@ function IncidentDetail({
               <Inline label="Persistence" value={`${incident.persistence_count} intervals`} />
               <Inline label="Evidence" value={incident.evidence_quality} />
             </div>
+            {projection && (
+              <div className="projected">
+                <span className="metric-label">Projected if sustained</span>
+                <span className="strong tabular">
+                  ≈ {fmt(projection.perDay, 1)} m³/day ({fmtInt(projection.litresPerDay)} L/day)
+                </span>
+                <span className="muted tiny">
+                  at {fmt(projection.perHour, 2)} m³/h from this interval — a projection, not a guarantee
+                </span>
+              </div>
+            )}
+            {balanceSuspended && (
+              <p className="text-warning small mt-12 mb-0">
+                Current interval evidence is incomplete; this arithmetic is informational only.
+              </p>
+            )}
           </>
         ) : (
           <p className="muted small mb-0">
@@ -332,13 +407,20 @@ function IncidentDetail({
           <h3 className="section-title">Evidence</h3>
         </div>
         {b ? (
-          <div className="expand-grid">
-            <Inline label="Coverage" value={fmtPct(b.coverage)} />
-            <Inline label="Reading completeness" value={fmtPct(b.completeness)} />
-            <Inline label="Time alignment" value={b.alignment_valid ? "Valid" : "Invalid"} />
-            <Inline label="Storage" value={Math.abs(b.storage_change_m3) > 0 ? `${fmt(b.storage_change_m3)} m³` : "Accounted"} />
-            <Inline label="Freshness" value={`${Math.round(b.freshness_seconds)} s`} />
-          </div>
+          <>
+            <div className="expand-grid">
+              <Inline label="Coverage" value={fmtPct(b.coverage)} />
+              <Inline label="Reading completeness" value={fmtPct(b.completeness)} />
+              <Inline label="Time alignment" value={b.alignment_valid ? "Valid" : "Invalid"} />
+              <Inline label="Storage" value={Math.abs(b.storage_change_m3) > 0 ? `${fmt(b.storage_change_m3)} m³` : "Accounted"} />
+              <Inline label="Freshness" value={`${Math.round(b.freshness_seconds)} s`} />
+            </div>
+            {showPausePanel && (
+              <p className="muted small mt-12 mb-0">
+                Missing or stale readings are the reason classification is suspended for this interval.
+              </p>
+            )}
+          </>
         ) : (
           <p className="muted small mb-0">No current valid balance is available for this incident boundary.</p>
         )}
@@ -359,6 +441,12 @@ function IncidentDetail({
               {incident.boundary_explanation}
             </span>
           </div>
+          {!["RESOLVED", "REPAIR_FAILED"].includes(incident.status) && (
+            <div className="kv-row">
+              <span className="kv-key">Operator focus</span>
+              <span className="kv-value" style={{ fontWeight: 450 }}>{operatorFocus}</span>
+            </div>
+          )}
         </div>
 
         {incident.repair && (
@@ -368,37 +456,36 @@ function IncidentDetail({
               <h3 className="section-title">Repair verification</h3>
               <Status value={incident.status} />
             </div>
-            <div className="flex-between mb-8">
-              <span className="small muted">
-                Healthy intervals {incident.verification_valid_intervals} / {incident.verification_required_intervals}
-              </span>
-              {incident.status === "RESOLVED" && <span className="small text-success strong">Repair verified</span>}
-              {incident.status === "REPAIR_FAILED" && <span className="small text-danger strong">Repair failed</span>}
-              {incident.status === "VERIFYING" && <span className="small muted">Verification in progress</span>}
+            <div className={`verify-headline ${verifyTone}`}>{verifyHeadline}</div>
+            <div className="verify-steps mt-12">
+              {Array.from({ length: incident.verification_required_intervals }, (_, i) => {
+                const done = i < incident.verification_valid_intervals;
+                return (
+                  <div key={i} className={`verify-step ${done ? "done" : "pending"}`}>
+                    <span className="metric-label">Valid interval {i + 1}</span>
+                    <span className="strong">{done ? "confirmed" : "awaiting meter evidence"}</span>
+                  </div>
+                );
+              })}
             </div>
-            <SegmentedProgress
-              total={incident.verification_required_intervals}
-              done={incident.verification_valid_intervals}
-              active={incident.status === "VERIFYING"}
-            />
             <div className="expand-grid mt-16">
               <Inline
                 label="Before repair"
                 value={incident.pre_repair_residual_rate !== null && incident.pre_repair_residual_rate !== undefined
-                  ? `${fmt(incident.pre_repair_residual_rate)} m³`
+                  ? `${fmt(incident.pre_repair_residual_rate)} m³/interval`
                   : "—"}
               />
               <Inline
-                label="Latest residual"
-                value={incident.post_repair_residuals.length > 0
-                  ? `${fmt(incident.post_repair_residuals[incident.post_repair_residuals.length - 1])} m³`
-                  : "—"}
+                label="Latest interval"
+                value={lastPostRepair !== null ? `${fmt(lastPostRepair)} m³` : "—"}
               />
               <Inline label="Reported by" value={incident.repair.actor} />
               <Inline label="Repair type" value={incident.repair.repair_type} />
             </div>
-            <p className="muted small mt-12 mb-0">
-              {incident.repair.location} · {incident.repair.notes}
+            <p className="verify-note">
+              A repair report is not accepted as proof. LeakLedger requires{" "}
+              {incident.verification_required_intervals} distinct valid intervals with complete, aligned meter
+              evidence before resolving this incident — {incident.repair.location}.
             </p>
           </>
         )}

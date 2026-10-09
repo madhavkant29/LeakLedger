@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
@@ -53,6 +53,24 @@ export default function Topology() {
 
   const activeIncident = incidents.find((i) => !["RESOLVED", "REPAIR_FAILED"].includes(i.status)) ?? null;
 
+  const userSelected = useRef(false);
+  const selectNode = (id: string) => {
+    userSelected.current = true;
+    setSelectedId(id);
+  };
+  useEffect(() => {
+    if (userSelected.current || !activeIncident) return;
+    setSelectedId(activeIncident.deepest_trustworthy_node_id);
+  }, [activeIncident?.id, activeIncident?.deepest_trustworthy_node_id]);
+
+  const pauseDetail = activeIncident
+    ? [...activeIncident.events].reverse().find((e) => e.event_type === "EvidenceInsufficient")?.detail ?? null
+    : null;
+  const localisationLabel = activeIncident
+    ? nodeById.get(activeIncident.deepest_trustworthy_node_id)?.label ?? activeIncident.deepest_trustworthy_node_id
+    : null;
+  const localisationPaused = activeIncident?.status === "EVIDENCE_INSUFFICIENT";
+
   const highlight = useMemo(() => {
     const set = new Set<string>();
     const addPath = (id: string | null | undefined) => {
@@ -103,6 +121,22 @@ export default function Topology() {
               flush
             >
               <div className="panel-body tight">
+                {activeIncident && (
+                  <div className={`loc-banner ${localisationPaused ? "paused" : ""}`} style={{ marginBottom: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="metric-label">
+                        {localisationPaused ? "Localisation paused" : "Deepest trustworthy boundary"}
+                      </div>
+                      <div className="strong" style={{ fontSize: 15, marginTop: 3 }}>{localisationLabel}</div>
+                      <div className="muted small" style={{ marginTop: 3 }}>
+                        {localisationPaused
+                          ? `${pauseDetail ?? "Required meter evidence is unavailable."} The boundary shown is the last trustworthy position.`
+                          : activeIncident.boundary_explanation}
+                      </div>
+                    </div>
+                    <Status value={activeIncident.status} />
+                  </div>
+                )}
                 <div className="topo-legend">
                   <span><i className="topo-marker success" aria-hidden="true" /> Balanced</span>
                   <span><i className="topo-marker danger" aria-hidden="true" /> Anomalous</span>
@@ -134,7 +168,7 @@ export default function Topology() {
                           highlight={highlight}
                           dimOthers={dimOthers}
                           selectedId={selectedId}
-                          onSelect={setSelectedId}
+                          onSelect={selectNode}
                         />
                       ))}
                     </div>

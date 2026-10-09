@@ -60,6 +60,7 @@ class AwsRuntime:
     # interval is reconciled once; if the interval never completes (a genuinely
     # missing meter), the deadline expires and fail-closed evaluation still happens.
     SETTLE_TIMEOUT_SECONDS = 5.0
+    SETTLE_PREDECESSOR_TIMEOUT_SECONDS = 25.0
     SETTLE_POLL_SECONDS = 0.5
 
     def __init__(
@@ -112,6 +113,7 @@ class AwsRuntime:
             return {"processed": 0, "duplicates": duplicates, "balances": 0, "incident": None}
         batch_timestamp = claimed[0].timestamp
         deadline = time.time() + self.SETTLE_TIMEOUT_SECONDS
+        predecessor_deadline = time.time() + self.SETTLE_PREDECESSOR_TIMEOUT_SECONDS
         appended_total: list[MeterReading] = []
         already_total = 0
         stale_total = 0
@@ -132,8 +134,14 @@ class AwsRuntime:
                     superseded_total += superseded
                     if appended:
                         self._persist_readings(site_id, store, appended, appended_audit)
-                    complete = self._interval_complete(store, batch_timestamp)
-                    if complete or time.time() >= deadline:
+                    current_complete = self._interval_complete(store, batch_timestamp)
+                    predecessor_complete = self._previous_interval_complete(store, batch_timestamp)
+                    ready = current_complete and predecessor_complete
+                    # A complete interval whose predecessor is still arriving gets a longer
+                    # settle window so pairs stay aligned under burst delivery. If the
+                    # predecessor never arrives, reconciliation fails closed with missing
+                    # reading pairs instead of comparing different periods.
+                    if ready or time.time() >= deadline or (current_complete and time.time() >= predecessor_deadline):
                         result = self._reconcile_locked(site_id, store, claimed, started, duplicates, appended_total, already_total, stale_total, superseded_total)
                 if result is None:
                     time.sleep(self.SETTLE_POLL_SECONDS)
@@ -222,6 +230,31 @@ class AwsRuntime:
             if not any(r.timestamp == timestamp for r in store.readings.get(node.id, [])):
                 return False
         return True
+
+    @staticmethod
+    def _previous_interval_complete(store, timestamp: str) -> bool:
+        """True when the immediately preceding interval present in the store is complete.
+
+        Reconciling a specific interval compares parent and child cumulative deltas.
+        If the preceding interval is still missing readings, the paired deltas can span
+        different periods and produce a misleading balance. Requiring the predecessor to
+        be complete makes out-of-order and burst delivery reconcile intervals in order;
+        the settle deadline still applies when an interval is genuinely incomplete.
+        """
+        target = _parse_ts(timestamp)
+        previous_ts: str | None = None
+        previous_parsed = None
+        for node in store.nodes.values():
+            if node.kind != NodeKind.METER:
+                continue
+            for reading in store.readings.get(node.id, []):
+                parsed = _parse_ts(reading.timestamp)
+                if parsed < target and (previous_parsed is None or parsed > previous_parsed):
+                    previous_parsed = parsed
+                    previous_ts = reading.timestamp
+        if previous_ts is None:
+            return True
+        return AwsRuntime._interval_complete(store, previous_ts)
 
     def _append_readings(self, store, claimed: list[MeterReading], current_generation: str | None = None) -> tuple[list[MeterReading], int, int, int]:
         """Append only readings that advance the ledger for their meter.

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
-import { EmptyState, ErrorState, Panel, SkeletonRows } from "@/components/ui";
+import { EmptyState, ErrorState, Panel, SkeletonRows, StatCell, StatStrip } from "@/components/ui";
 import { api, fmtDateTime } from "@/lib/api";
 
 type Validation = {
@@ -12,6 +12,8 @@ type Validation = {
   results: { name: string; passed: boolean; detail: string }[];
   note: string;
 };
+
+type Health = { ok: boolean; service: string; mode: string; version: string };
 
 const EXPECTED: Record<string, string> = {
   "Normal site": "0 incidents",
@@ -25,6 +27,7 @@ const EXPECTED: Record<string, string> = {
 
 export default function ValidationPage() {
   const [data, setData] = useState<Validation | null>(null);
+  const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [duration, setDuration] = useState<number | null>(null);
@@ -35,8 +38,12 @@ export default function ValidationPage() {
     setError("");
     const started = performance.now();
     try {
-      const result = await api<Validation>("/demo/validation");
+      const [result, healthResult] = await Promise.all([
+        api<Validation>("/demo/validation"),
+        api<Health>("/health").catch(() => null),
+      ]);
       setData(result);
+      setHealth(healthResult);
       setDuration(Math.round(performance.now() - started));
       setRanAt(new Date().toISOString());
     } catch (e) {
@@ -77,6 +84,22 @@ export default function ValidationPage() {
 
       {error && <ErrorState title="Validation run failed" message={error} onRetry={load} />}
 
+      {health && (
+        <StatStrip>
+          <StatCell
+            label="Runtime"
+            value={health.mode === "aws" ? "AWS · live" : health.mode}
+            sub={`${health.service} ${health.version}`}
+          />
+          <StatCell
+            label="Pipeline"
+            value="Event-driven"
+            sub="API Gateway → Lambda → S3 raw archive → EventBridge → SQS → reconciliation worker → DynamoDB"
+          />
+          <StatCell label="Decision model" value="Deterministic" sub="No AI, no ML, no external API" />
+        </StatStrip>
+      )}
+
       {loading && !data && (
         <Panel title="Controlled scenarios">
           <SkeletonRows rows={7} cols={4} />
@@ -85,7 +108,7 @@ export default function ValidationPage() {
 
       {data && (
         <>
-          <Panel flush>
+          <Panel flush className="mt-16">
             {data.results.length === 0 ? (
               <EmptyState title="No validation results" />
             ) : (

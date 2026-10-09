@@ -6,6 +6,19 @@
 
 LeakLedger is a deterministic environmental-infrastructure system built for the WeMakeDevs AWS Environmental Hackathon. It is intentionally not a generic consumption dashboard or a black-box leak detector. Its core mechanism is **physical water reconciliation across a meter topology**, explicit evidence-quality gates, trustworthy localisation boundaries, an auditable incident state machine, and post-repair verification.
 
+## Live demo
+
+**https://8k133q1yyd.execute-api.ap-south-1.amazonaws.com** — deployed on AWS (`ap-south-1`). No signup, no password: choose a persona and enter.
+
+A 90-second path through the product:
+
+1. **Replay Lab → Hidden Hostel B loss → Reset → Run** (or Step). Water disappears below Hostel B until the incident opens on the deepest trustworthy boundary.
+2. Open **Topology** to see the localisation path, then **Incidents** for the exact reconciliation and evidence behind the claim.
+3. Switch the scenario to **Missing meter — fail closed**. LeakLedger pauses localisation instead of over-claiming.
+4. Switch to **Successful repair verification**, record the repair (optionally as Neha Sharma), and continue: the incident resolves only after three distinct valid intervals confirm it.
+
+Every reading is processed by the deployed AWS pipeline — API Gateway → Lambda → S3 raw archive → EventBridge → SQS → reconciliation worker → DynamoDB ([architecture and runtime proof](#aws-architecture-and-runtime-proof)).
+
 ## Product thesis
 
 A conventional dashboard tells a facility team that water consumption increased. LeakLedger asks a harder operational question:
@@ -62,6 +75,52 @@ Deepest trustworthy anomaly: Hostel B
 
 rather than only “Today's usage: 82.4 m³”.
 
+## Judge quick tour
+
+Captured from the live deployment. This is the product story in seven screens: unexplained water → trustworthy localisation → evidence-backed incident → fail-closed pause → repair verification → verified resolution → temporal replay.
+
+### 1. Overview — water that cannot be explained
+
+The reconciliation arithmetic leads the page: entered − measured downstream − known unmetered − storage change = unexplained, with evidence quality and the active incident.
+
+![Overview showing 0.35 m³ unexplained at Hostel B Main](docs/screenshots/tour/01-overview-unexplained.jpg)
+
+### 2. Topology — deepest trustworthy boundary
+
+The localisation result is stated on the page and the path is highlighted. Other branches are de-emphasised, and the page says why descent stopped instead of implying an exact pipe location.
+
+![Topology highlighting Hostel B Main as the deepest trustworthy boundary](docs/screenshots/tour/02-topology-localisation.jpg)
+
+### 3. Incident — the exact evidence behind the claim
+
+Why the incident exists, coverage, completeness, time alignment, the localisation boundary, the operator focus, and the lifecycle timeline.
+
+![Incident detail with reconciliation arithmetic and evidence](docs/screenshots/tour/03-incident-evidence.jpg)
+
+### 4. Fail closed — evidence insufficient
+
+When a downstream meter stops reporting, localisation pauses with the reason. LeakLedger does not convert missing observability into a stronger location claim.
+
+![Incident paused with Evidence Insufficient and the pause reason](docs/screenshots/tour/04-evidence-insufficient.jpg)
+
+### 5. Repair verification — a report is not proof
+
+The repair is recorded, but the incident stays open. Three distinct valid intervals must be confirmed by meter evidence.
+
+![Repair verification with two confirmed intervals and one awaiting evidence](docs/screenshots/tour/05-repair-verifying.jpg)
+
+### 6. Repair verified — resolved by evidence
+
+The incident resolves only after the full verification streak completes.
+
+![Incident resolved after three valid intervals](docs/screenshots/tour/06-repair-verified.jpg)
+
+### 7. Replay Lab — temporal behaviour
+
+The interval trace shows balanced → anomalous → incident, alongside the lifecycle event stream.
+
+![Replay Lab with the recent interval trace and lifecycle events](docs/screenshots/tour/07-replay-lifecycle.jpg)
+
 ## Demo identities
 
 There is intentionally **no authentication or authorization** in this hackathon build. `/signin` is a demo persona selector only:
@@ -70,11 +129,19 @@ There is intentionally **no authentication or authorization** in this hackathon 
 - **Neha Sharma** — Maintenance Engineer
 - **Rohan Kapoor** — Operations Manager
 
-The selected persona is stored client-side and used as the actor for audit actions. All personas can access the same features and data. The sign-in screen explicitly labels this as a simulated demo environment.
+The selected persona is stored client-side and used as the actor for audit actions. All personas can access the same features and data — **this is not role-based access control, and the demo does not pretend to have any**. The personas exist to demonstrate operational handoff and actor attribution:
 
-## Product screenshots
+```text
+Aarav Mehta — Facility Manager       acknowledges the incident
+Neha Sharma — Maintenance Engineer   records the repair
+Rohan Kapoor — Operations Manager    reviews audit and validation evidence
+```
 
-Captured from the deployed demo at `https://8k133q1yyd.execute-api.ap-south-1.amazonaws.com` while running the **Hidden Hostel B loss** scenario, so every screen shows live reconciled data and an open incident (deepest trustworthy boundary `HOSTEL-B-MAIN`, 0.35 m³ unexplained, evidence `HIGH`). The three identities share the same data and features; the selected persona is stored client-side and recorded as the actor on operational actions.
+The sign-in screen explicitly labels this as a simulated demo environment.
+
+## Full product walkthrough
+
+Every route, for every demo identity. Screens were captured from the live deployment with the selected persona recorded as the operational actor. The quick tour above shows the signature states; the walkthrough below is the complete route-by-route evidence, collapsed by persona.
 
 ### Public pages
 
@@ -96,7 +163,7 @@ Demo persona selector. No password, token or Cognito flow: choosing an identity 
 
 *Owns site water accountability and incident response.*
 
-<details open>
+<details>
 <summary><strong>Show the 9 application screens as Aarav Mehta</strong></summary>
 
 #### Overview (`/overview`)
@@ -359,6 +426,34 @@ The backend AWS adapters implement:
 - CloudWatch metrics
 - partial-batch SQS failure reporting
 - grouping sibling meter events by site + physical interval before reconciliation
+
+## AWS architecture and runtime proof
+
+The demo is not a mock: readings travel the deployed pipeline shown below, and the sequence is inspectable in S3, EventBridge, SQS, DynamoDB and CloudWatch.
+
+```text
+Meter reading
+  → API Gateway HTTP API
+  → API Lambda
+  → S3 raw event archive               (immutable JSON per reading)
+  → EventBridge custom bus             (MeterReadingReceived rule)
+  → SQS reconciliation queue (+ DLQ)
+  → reconciliation worker Lambda       (interval grouping, idempotency claims)
+  → DynamoDB state table               (topology, readings, balances, incidents, audit)
+```
+
+The Validation page reads live runtime mode from the API and shows `AWS · live` with the pipeline chain. Production verification of the running stack (checked at deployment):
+
+```text
+AWS mode: LIVE         (GET /health → mode: aws)
+SQS queue: drained     (0 visible, 0 in-flight)
+DLQ: 0 messages
+Worker Lambda: 0 errors
+Ingest → incident → repair → resolution verified through real SQS/worker/DynamoDB
+X-Ray traces present
+```
+
+![Validation page showing AWS runtime mode and the event pipeline](docs/screenshots/tour/08-aws-runtime-proof.jpg)
 
 ## Idempotency and interval correctness
 

@@ -408,6 +408,49 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .config-block:first-child { border-top: 0; padding-top: 0; }
 .config-block:last-child { padding-bottom: 0; }
 
+/* Localisation summary banner (topology) */
+.loc-banner {
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  padding: 12px 14px; border: 1px solid var(--accent-border); border-left: 3px solid var(--accent);
+  background: var(--accent-soft); border-radius: 7px;
+}
+.loc-banner.paused { border-color: var(--warning-border); border-left-color: var(--warning); background: var(--warning-bg); }
+
+/* Fail-closed localisation pause panel (incidents) */
+.failclosed-panel {
+  margin-top: 16px; padding: 16px 18px; border: 1px solid var(--warning-border);
+  border-left: 3px solid var(--warning); background: var(--warning-bg); border-radius: 8px;
+}
+.failclosed-title { display: flex; align-items: center; gap: 9px; font-weight: 650; color: var(--warning); font-size: 13.5px; }
+.failclosed-panel p { margin: 10px 0 0; color: var(--text-2); font-size: 13px; line-height: 1.55; }
+
+/* Projected impact line */
+.projected {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+  margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface-2);
+}
+
+/* Repair verification steps */
+.verify-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.verify-step { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); }
+.verify-step span { display: block; }
+.verify-step.done { border-color: var(--success-border); background: var(--success-bg); }
+.verify-step.pending { border-style: dashed; }
+.verify-headline { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
+.verify-headline.ok { color: var(--success); }
+.verify-headline.failed { color: var(--danger); }
+.verify-headline.warn { color: var(--warning); }
+.verify-note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* Interval trace (replay) */
+.trace-row {
+  display: grid; grid-template-columns: 48px minmax(78px, auto) minmax(0, 1fr) auto;
+  align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 12.5px;
+}
+.trace-row:first-child { border-top: 0; }
+.trace-time { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+
 /* ============================================================
    Landing page
    ============================================================ */

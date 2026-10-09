@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Status } from "@/components/Status";
 import { Banner, EmptyState, Panel, Tabs } from "@/components/ui";
 import { api, fmt, fmtInterval, fmtPct, fmtTime } from "@/lib/api";
-import type { AuditEvent, DemoState } from "@/lib/types";
+import type { AuditEvent, Balance, DemoState } from "@/lib/types";
 
 const SCENARIOS = [
   ["normal", "Normal — balanced campus"],
@@ -38,6 +38,7 @@ export default function Replay() {
   const [scenario, setScenario] = useState("hidden-leak");
   const [state, setState] = useState<DemoState | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
+  const [ledger, setLedger] = useState<Balance[]>([]);
   const [running, setRunning] = useState(false);
   const [speed, setSpeed] = useState<Speed>("5");
   const [error, setError] = useState("");
@@ -52,12 +53,14 @@ export default function Replay() {
 
   const refresh = useCallback(async () => {
     try {
-      const [demoState, auditRows] = await Promise.all([
+      const [demoState, auditRows, ledgerRows] = await Promise.all([
         api<DemoState>("/demo/state"),
         api<AuditEvent[]>("/sites/northbridge/audit?limit=60"),
+        api<Balance[]>("/sites/northbridge/ledger?limit=120"),
       ]);
       setState(demoState);
       setAudit(auditRows);
+      setLedger(ledgerRows);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -138,6 +141,11 @@ export default function Replay() {
   const b = state?.latest_balance ?? null;
   const root = state?.root_balance ?? null;
   const incident = state?.incidents?.[0] ?? null;
+  const focusNodeId = incident?.node_id ?? root?.node_id ?? "MAIN-CAMPUS";
+  const history = ledger
+    .filter((r) => r.node_id === focusNodeId)
+    .sort((a, b2) => a.interval_end.localeCompare(b2.interval_end))
+    .slice(-8);
   const lifecycle = audit.filter((a) => LIFECYCLE_EVENTS.has(a.event_type)).slice(0, 14);
   const readingsIngested = audit.filter((a) => a.event_type === "MeterReadingReceived").length;
 
@@ -326,6 +334,28 @@ export default function Replay() {
                 No active incident. A loss must pass the evidence gates and persist across the configured number of
                 intervals before an incident opens.
               </p>
+            )}
+          </Panel>
+
+          <Panel title="Recent intervals" subtitle={`${focusNodeId} · ${history.length} reconciled`}>
+            {history.length === 0 ? (
+              <EmptyState
+                title="No reconciled intervals yet"
+                description="Reset a scenario and step the replay to produce balances."
+              />
+            ) : (
+              <div>
+                {history.map((r) => (
+                  <div className="trace-row" key={r.interval_end}>
+                    <span className="trace-time">{fmtTime(r.interval_end)}</span>
+                    <Status value={r.state} />
+                    <span className={`tabular small ${r.residual_m3 > 0.05 ? "text-danger" : "muted"}`}>
+                      {r.residual_m3 > 0.05 ? `${fmt(r.residual_m3)} m³ unexplained` : "accounted"}
+                    </span>
+                    <span className="muted tiny tabular">{fmtPct(r.coverage)}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </Panel>
 

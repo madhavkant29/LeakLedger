@@ -6,7 +6,8 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/PageHeader";
 import { Status } from "@/components/Status";
 import { EmptyState, ErrorState, Panel, SkeletonRows } from "@/components/ui";
-import { api, fmt, fmtInterval, fmtPct, fmtTime, timeAgo } from "@/lib/api";
+import { api, fmt, fmtInterval, fmtInt, fmtPct, fmtTime, timeAgo } from "@/lib/api";
+import { projectedIfSustained } from "@/lib/impact";
 import type { AuditEvent, Balance, Incident, TopologyResponse, TopoTreeNode } from "@/lib/types";
 
 type OverviewData = {
@@ -67,6 +68,11 @@ export default function Overview() {
 
   const b = data?.current_balance ?? null;
   const incident = data?.active_incident ?? null;
+  const incidentBalance = incident?.current_balance ?? null;
+  const incidentProjection =
+    incidentBalance && incidentBalance.state === "ANOMALOUS"
+      ? projectedIfSustained(incidentBalance.residual_m3, incidentBalance.interval_start, incidentBalance.interval_end)
+      : null;
   const nodeById = new Map((topo?.nodes ?? []).map((n) => [n.id, n]));
   const rows = topo ? flatten(topo.tree) : [];
   const anomalous = (b?.residual_m3 ?? 0) > 0.05;
@@ -194,6 +200,15 @@ export default function Overview() {
                   <Inline label="Evidence" value={incident.evidence_quality} />
                   <Inline label="Opened" value={timeAgo(incident.opened_at)} />
                 </div>
+                {incidentProjection && (
+                  <div className="projected">
+                    <span className="metric-label">Projected if sustained</span>
+                    <span className="strong tabular">
+                      ≈ {fmt(incidentProjection.perDay, 1)} m³/day ({fmtInt(incidentProjection.litresPerDay)} L/day)
+                    </span>
+                    <span className="muted tiny">at {fmt(incidentProjection.perHour, 2)} m³/h from this interval — a projection, not a guarantee</span>
+                  </div>
+                )}
                 <p className="muted small mt-12 mb-0">{incident.boundary_explanation}</p>
               </>
             ) : (

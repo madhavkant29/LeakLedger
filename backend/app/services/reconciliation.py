@@ -33,13 +33,22 @@ class ReconciliationEngine:
     def _parse(ts: str) -> datetime:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
-    @staticmethod
-    def _pair_at(store: LocalStore, meter_id: str, interval_end: str):
-        """Return the (previous, current) readings for the interval ending at interval_end."""
+    def _pair_at(self, store: LocalStore, meter_id: str, interval_end: str, expected_previous: str | None = None):
+        """Return the (previous, current) readings for the interval ending at interval_end.
+
+        When expected_previous is supplied, the predecessor must be that exact interval
+        boundary. A meter with a gap before interval_end is treated as missing a reading
+        pair so parent/child volumes are never compared across different periods.
+        """
         rows = store.readings.get(meter_id, [])
         for i, reading in enumerate(rows):
             if reading.timestamp == interval_end:
-                return (rows[i - 1], reading) if i >= 1 else None
+                if i < 1:
+                    return None
+                previous = rows[i - 1]
+                if expected_previous is not None and self._parse(previous.timestamp) != self._parse(expected_previous):
+                    return None
+                return (previous, reading)
         return None
 
     @staticmethod
@@ -49,9 +58,9 @@ class ReconciliationEngine:
                 return reading
         return None
 
-    def _interval_volume(self, store: LocalStore, meter_id: str, interval_end: str | None = None) -> tuple[Optional[float], str | None]:
+    def _interval_volume(self, store: LocalStore, meter_id: str, interval_end: str | None = None, expected_previous: str | None = None) -> tuple[Optional[float], str | None]:
         if interval_end is not None:
-            pair = self._pair_at(store, meter_id, interval_end)
+            pair = self._pair_at(store, meter_id, interval_end, expected_previous)
             if pair is None:
                 return None, "missing reading pair"
             before, after = pair
@@ -65,9 +74,9 @@ class ReconciliationEngine:
             return None, "counter reset detected"
         return delta, None
 
-    def reconcile_node(self, store: LocalStore, node: MeterNode, interval_end: str | None = None) -> BalanceResult:
+    def reconcile_node(self, store: LocalStore, node: MeterNode, interval_end: str | None = None, expected_previous: str | None = None) -> BalanceResult:
         if interval_end is not None:
-            pair = self._pair_at(store, node.id, interval_end)
+            pair = self._pair_at(store, node.id, interval_end, expected_previous)
             latest = self._reading_at(store, node.id, interval_end)
             now_ts = interval_end
             start_ts = pair[0].timestamp if pair else interval_end
@@ -97,14 +106,14 @@ class ReconciliationEngine:
                 explanation="This branch is explicitly modelled as unmetered and is never treated as unexplained loss.",
             )
 
-        inflow, parent_err = self._interval_volume(store, node.id, interval_end)
+        inflow, parent_err = self._interval_volume(store, node.id, interval_end, expected_previous)
         child_nodes = children(store.nodes, node.id)
         measured_children = [c for c in child_nodes if c.kind == NodeKind.METER]
         unmetered_children = [c for c in child_nodes if c.kind == NodeKind.UNMETERED]
 
         # A terminal meter represents accounted end-use. It has no downstream boundary to reconcile.
         if not child_nodes:
-            terminal_volume, terminal_err = self._interval_volume(store, node.id, interval_end)
+            terminal_volume, terminal_err = self._interval_volume(store, node.id, interval_end, expected_previous)
             if terminal_err:
                 return BalanceResult(
                     node_id=node.id, interval_start=start_ts, interval_end=now_ts,
@@ -136,7 +145,7 @@ class ReconciliationEngine:
         child_errors: list[str] = []
         child_latest_times: list[datetime] = []
         for child in measured_children:
-            volume, err = self._interval_volume(store, child.id, interval_end)
+            volume, err = self._interval_volume(store, child.id, interval_end, expected_previous)
             if err:
                 child_errors.append(f"{child.label}: {err}")
             else:
@@ -240,19 +249,33 @@ class ReconciliationEngine:
 
     def reconcile_all(self, store: LocalStore, require_reading_pairs: bool = False, interval_end: str | None = None) -> list[BalanceResult]:
         results = []
+        expected_previous: str | None = None
+        if interval_end is not None:
+            target = self._parse(interval_end)
+            best = None
+            for node in store.nodes.values():
+                if node.kind != NodeKind.METER:
+                    continue
+                for reading in store.readings.get(node.id, []):
+                    parsed = self._parse(reading.timestamp)
+                    if parsed < target and (best is None or parsed > best):
+                        best = parsed
+                        expected_previous = reading.timestamp
         for node in store.nodes.values():
             if node.kind == NodeKind.METER:
                 # In the event-driven runtime a batch may only contain a subset of
                 # sibling meters, and bursts can deliver several intervals at once.
                 # Reconciling a specific interval keeps every physical interval
                 # evaluated exactly once, regardless of processing order.
-                if require_reading_pairs:
-                    if interval_end is not None:
-                        if self._pair_at(store, node.id, interval_end) is None:
-                            continue
-                    elif len(store.latest_two(node.id)) < 2:
+                if require_reading_pairs and interval_end is not None:
+                    # The first observed interval has no predecessor anywhere; no
+                    # interval can be formed yet. Nodes with a reading at this interval
+                    # are still reconciled, and a missing predecessor fails closed.
+                    if expected_previous is None or self._reading_at(store, node.id, interval_end) is None:
                         continue
-                result = self.reconcile_node(store, node, interval_end)
+                if require_reading_pairs and interval_end is None and len(store.latest_two(node.id)) < 2:
+                    continue
+                result = self.reconcile_node(store, node, interval_end, expected_previous)
                 results.append(result)
         store.balances.extend(results)
         return results

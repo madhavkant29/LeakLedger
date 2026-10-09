@@ -142,6 +142,8 @@ class Incident:
     verification_last_interval_end: Optional[str] = None
     pre_evidence_status: Optional[str] = None
     verification_floor_interval_end: Optional[str] = None
+    status_basis_interval_end: Optional[str] = None
+    verification_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

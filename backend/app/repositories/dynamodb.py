@@ -97,6 +97,8 @@ def _incident(d: dict[str, Any]) -> Incident:
         verification_last_interval_end=d.get("verification_last_interval_end"),
         pre_evidence_status=d.get("pre_evidence_status"),
         verification_floor_interval_end=d.get("verification_floor_interval_end"),
+        status_basis_interval_end=d.get("status_basis_interval_end"),
+        verification_evidence=dict(d.get("verification_evidence", {})),
     )
 
 
