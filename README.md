@@ -72,6 +72,183 @@ There is intentionally **no authentication or authorization** in this hackathon 
 
 The selected persona is stored client-side and used as the actor for audit actions. All personas can access the same features and data. The sign-in screen explicitly labels this as a simulated demo environment.
 
+## Product screenshots
+
+Captured from the deployed demo at `https://8k133q1yyd.execute-api.ap-south-1.amazonaws.com` while running the **Hidden Hostel B loss** scenario, so every screen shows live reconciled data and an open incident (deepest trustworthy boundary `HOSTEL-B-MAIN`, 0.35 m³ unexplained, evidence `HIGH`). The three identities share the same data and features; the selected persona is stored client-side and recorded as the actor on operational actions.
+
+### Public pages
+
+These screens are identity-independent.
+
+#### Landing page (`/`)
+
+Product overview: the reconciliation thesis, a worked water balance, the fail-closed principle, repair verification, the AWS event flow, and the demo entry point.
+
+![LeakLedger landing page](docs/screenshots/public/landing.jpg)
+
+#### Sign in (`/signin`)
+
+Demo persona selector. No password, token or Cognito flow: choosing an identity stores it client-side and enters the application.
+
+![Demo persona selector](docs/screenshots/public/signin.jpg)
+
+### Aarav Mehta — Facility Manager
+
+*Owns site water accountability and incident response.*
+
+<details open>
+<summary><strong>Show the 9 application screens as Aarav Mehta</strong></summary>
+
+#### Overview (`/overview`)
+
+Site-wide water accountability for the latest interval: entered, measured downstream, known unmetered, storage change and unexplained residual, plus evidence quality, the highest-priority open incident, current topology state and recent reconciliation activity.
+
+![Overview as Aarav Mehta](docs/screenshots/aarav-mehta/overview.jpg)
+
+#### Water Ledger (`/ledger`)
+
+Accounting entries for every reconciled interval with per-node filtering and state tabs. Expanding a row shows the exact arithmetic and evidence gates behind the residual.
+
+![Water Ledger as Aarav Mehta](docs/screenshots/aarav-mehta/ledger.jpg)
+
+#### Topology (`/topology`)
+
+The water accounting hierarchy. When an incident is open the localisation path is highlighted and other branches are de-emphasised; selecting a node shows its balance, evidence and accounting configuration.
+
+![Topology as Aarav Mehta](docs/screenshots/aarav-mehta/topology.jpg)
+
+#### Incidents (`/incidents`)
+
+Incident workspace: a filterable case list next to a detail view covering why the incident exists, evidence quality, the deepest trustworthy boundary, repair verification progress, the lifecycle timeline and guarded lifecycle actions.
+
+![Incidents as Aarav Mehta](docs/screenshots/aarav-mehta/incidents.jpg)
+
+#### Replay Lab (`/replay`)
+
+Deterministic scenario console: choose a scenario, reset, run or step it, set playback speed, and watch the live reconciliation alongside the lifecycle event stream.
+
+![Replay Lab as Aarav Mehta](docs/screenshots/aarav-mehta/replay.jpg)
+
+#### Meter Data (`/meters`)
+
+Meter inventory with health, freshness, latest cumulative readings and expected intervals, plus CSV import with per-row rejection reasons and the accepted CSV contract.
+
+![Meter Data as Aarav Mehta](docs/screenshots/aarav-mehta/meters.jpg)
+
+#### Audit Trail (`/audit`)
+
+Chronological evidence log with search and event-type filters. Rows expand to show the correlation ID, extracted fields and the raw payload.
+
+![Audit Trail as Aarav Mehta](docs/screenshots/aarav-mehta/audit.jpg)
+
+#### Settings (`/settings`)
+
+Operational policy: anomaly rules, evidence gates, repair-verification requirements, site posture, and topology accounting for known-unmetered and buffered boundaries.
+
+![Settings as Aarav Mehta](docs/screenshots/aarav-mehta/settings.jpg)
+
+#### Validation (`/validation`)
+
+Controlled deterministic validation report: every failure mode with its expected behaviour, PASS/FAIL result and observed detail.
+
+![Validation as Aarav Mehta](docs/screenshots/aarav-mehta/validation.jpg)
+
+</details>
+
+### Neha Sharma — Maintenance Engineer
+
+*Investigates boundaries, records repairs and verifies outcomes.*
+
+<details>
+<summary><strong>Show the 9 application screens as Neha Sharma</strong></summary>
+
+Same screens as above, captured with this identity selected.
+
+#### Overview (`/overview`)
+
+![Overview as Neha Sharma](docs/screenshots/neha-sharma/overview.jpg)
+
+#### Water Ledger (`/ledger`)
+
+![Water Ledger as Neha Sharma](docs/screenshots/neha-sharma/ledger.jpg)
+
+#### Topology (`/topology`)
+
+![Topology as Neha Sharma](docs/screenshots/neha-sharma/topology.jpg)
+
+#### Incidents (`/incidents`)
+
+![Incidents as Neha Sharma](docs/screenshots/neha-sharma/incidents.jpg)
+
+#### Replay Lab (`/replay`)
+
+![Replay Lab as Neha Sharma](docs/screenshots/neha-sharma/replay.jpg)
+
+#### Meter Data (`/meters`)
+
+![Meter Data as Neha Sharma](docs/screenshots/neha-sharma/meters.jpg)
+
+#### Audit Trail (`/audit`)
+
+![Audit Trail as Neha Sharma](docs/screenshots/neha-sharma/audit.jpg)
+
+#### Settings (`/settings`)
+
+![Settings as Neha Sharma](docs/screenshots/neha-sharma/settings.jpg)
+
+#### Validation (`/validation`)
+
+![Validation as Neha Sharma](docs/screenshots/neha-sharma/validation.jpg)
+
+</details>
+
+### Rohan Kapoor — Operations Manager
+
+*Reviews operating risk, evidence quality and audit history.*
+
+<details>
+<summary><strong>Show the 9 application screens as Rohan Kapoor</strong></summary>
+
+Same screens as above, captured with this identity selected.
+
+#### Overview (`/overview`)
+
+![Overview as Rohan Kapoor](docs/screenshots/rohan-kapoor/overview.jpg)
+
+#### Water Ledger (`/ledger`)
+
+![Water Ledger as Rohan Kapoor](docs/screenshots/rohan-kapoor/ledger.jpg)
+
+#### Topology (`/topology`)
+
+![Topology as Rohan Kapoor](docs/screenshots/rohan-kapoor/topology.jpg)
+
+#### Incidents (`/incidents`)
+
+![Incidents as Rohan Kapoor](docs/screenshots/rohan-kapoor/incidents.jpg)
+
+#### Replay Lab (`/replay`)
+
+![Replay Lab as Rohan Kapoor](docs/screenshots/rohan-kapoor/replay.jpg)
+
+#### Meter Data (`/meters`)
+
+![Meter Data as Rohan Kapoor](docs/screenshots/rohan-kapoor/meters.jpg)
+
+#### Audit Trail (`/audit`)
+
+![Audit Trail as Rohan Kapoor](docs/screenshots/rohan-kapoor/audit.jpg)
+
+#### Settings (`/settings`)
+
+![Settings as Rohan Kapoor](docs/screenshots/rohan-kapoor/settings.jpg)
+
+#### Validation (`/validation`)
+
+![Validation as Rohan Kapoor](docs/screenshots/rohan-kapoor/validation.jpg)
+
+</details>
+
 ## Repository layout
 
 ```text
