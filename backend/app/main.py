@@ -64,6 +64,11 @@ class StaticFileMiddleware:
     Next.js prefetches RSC payloads such as `/incidents/index.txt`, which would
     otherwise be captured by the `/incidents/{incident_id}` API route. Only real
     files are short-circuited; everything else falls through to the API.
+
+    Responses carry explicit cache policy: content-hashed `/_next/static/` assets
+    are immutable, while documents and RSC payloads must be revalidated so a new
+    deployment is never shadowed by a stale cached build during client-side
+    navigation.
     """
 
     def __init__(self, app, directory):
@@ -80,9 +85,33 @@ class StaticFileMiddleware:
                 except ValueError:
                     candidate = None
                 if candidate is not None and candidate.is_file():
-                    await FileResponse(candidate)(scope, receive, send)
+                    response = FileResponse(candidate)
+                    response.headers["Cache-Control"] = cache_policy(path)
+                    await response(scope, receive, send)
                     return
         await self.app(scope, receive, send)
+
+
+class FrontendStaticFiles(StaticFiles):
+    """Static export mount (directory indexes) with the same caching policy."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        scope = kwargs.get("scope")
+        if scope is None:
+            scope = next((arg for arg in args if isinstance(arg, dict) and "path" in arg), None)
+        path = scope.get("path", "") if isinstance(scope, dict) else ""
+        response.headers["Cache-Control"] = cache_policy(path)
+        return response
+
+
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+REVALIDATE_CACHE = "no-cache"
+IMMUTABLE_PREFIX = "/_next/static/"
+
+
+def cache_policy(path: str) -> str:
+    return IMMUTABLE_CACHE if path.startswith(IMMUTABLE_PREFIX) else REVALIDATE_CACHE
 
 
 app = FastAPI(title="LeakLedger API", version="1.0.0")
@@ -722,4 +751,4 @@ def demo_validation():
 # When CloudFront is unavailable (for example on AWS accounts pending CloudFront
 # verification), the same static export is served by this Lambda through API Gateway.
 if SERVE_FRONTEND and FRONTEND_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+    app.mount("/", FrontendStaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

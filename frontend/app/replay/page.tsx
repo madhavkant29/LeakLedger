@@ -9,16 +9,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { Status } from "@/components/Status";
 import { Banner, EmptyState, Panel, Tabs } from "@/components/ui";
 import { api, fmt, fmtInterval, fmtPct, fmtTime } from "@/lib/api";
+import { SCENARIOS, nextScenarioSelection } from "@/lib/scenario";
 import type { AuditEvent, Balance, DemoState } from "@/lib/types";
-
-const SCENARIOS = [
-  ["normal", "Normal — balanced campus"],
-  ["hidden-leak", "Hidden Hostel B loss"],
-  ["missing-reading", "Missing meter — fail closed"],
-  ["counter-reset", "Counter reset"],
-  ["repair", "Successful repair verification"],
-  ["failed-repair", "Failed repair verification"],
-] as const;
 
 const LIFECYCLE_EVENTS = new Set([
   "IncidentOpened",
@@ -35,11 +27,11 @@ const LIFECYCLE_EVENTS = new Set([
 type Speed = "1" | "5" | "20" | "100";
 
 export default function Replay() {
-  // The selector is hydrated from the backend replay state. It only diverges from
-  // the server value while the user has deliberately picked a scenario and not yet
-  // reset, so a poll or remount can never present the wrong active scenario.
-  const [scenario, setScenario] = useState<string | null>(null);
-  const scenarioDirty = useRef(false);
+  // The backend replay state is the source of truth for the active scenario.
+  // `pendingScenario` is only set when the user deliberately picks a different
+  // scenario and is cleared when Reset applies it, so the displayed selection is
+  // always derived and can never disagree with the server.
+  const [pendingScenario, setPendingScenario] = useState<string | null>(null);
   const [state, setState] = useState<DemoState | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [ledger, setLedger] = useState<Balance[]>([]);
@@ -50,6 +42,8 @@ export default function Replay() {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<DemoState | null>(null);
   const autoBusy = useRef(false);
+
+  const selectedScenario = nextScenarioSelection(state?.scenario, pendingScenario);
 
   useEffect(() => {
     stateRef.current = state;
@@ -65,9 +59,6 @@ export default function Replay() {
       setState(demoState);
       setAudit(auditRows);
       setLedger(ledgerRows);
-      if (!scenarioDirty.current) {
-        setScenario(demoState.scenario);
-      }
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -75,13 +66,13 @@ export default function Replay() {
   }, []);
 
   const reset = async () => {
-    const target = scenario ?? state?.scenario;
+    const target = selectedScenario;
     if (!target) return;
     setRunning(false);
     setBusy(true);
     try {
       await api("/demo/reset", { method: "POST", body: JSON.stringify({ scenario: target }) });
-      scenarioDirty.current = false;
+      setPendingScenario(null);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -185,13 +176,10 @@ export default function Replay() {
                 <span className="field-label">Scenario</span>
                 <select
                   className="select"
-                  value={scenario ?? ""}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                    scenarioDirty.current = true;
-                    setScenario(e.target.value);
-                  }}
+                  value={selectedScenario ?? ""}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setPendingScenario(e.target.value)}
                 >
-                  {scenario === null && <option value="" disabled>Loading scenario…</option>}
+                  {selectedScenario === null && <option value="" disabled>Loading scenario…</option>}
                   {SCENARIOS.map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
                   ))}
@@ -314,7 +302,7 @@ export default function Replay() {
             <div className="kv">
               <div className="kv-row">
                 <span className="kv-key">Scenario</span>
-                <span className="kv-value mono">{state?.scenario ?? scenario ?? "—"}</span>
+                <span className="kv-value mono">{state?.scenario ?? "—"}</span>
               </div>
               <div className="kv-row">
                 <span className="kv-key">Step</span>
