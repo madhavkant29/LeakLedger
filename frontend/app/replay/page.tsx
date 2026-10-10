@@ -35,7 +35,11 @@ const LIFECYCLE_EVENTS = new Set([
 type Speed = "1" | "5" | "20" | "100";
 
 export default function Replay() {
-  const [scenario, setScenario] = useState("hidden-leak");
+  // The selector is hydrated from the backend replay state. It only diverges from
+  // the server value while the user has deliberately picked a scenario and not yet
+  // reset, so a poll or remount can never present the wrong active scenario.
+  const [scenario, setScenario] = useState<string | null>(null);
+  const scenarioDirty = useRef(false);
   const [state, setState] = useState<DemoState | null>(null);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [ledger, setLedger] = useState<Balance[]>([]);
@@ -61,6 +65,9 @@ export default function Replay() {
       setState(demoState);
       setAudit(auditRows);
       setLedger(ledgerRows);
+      if (!scenarioDirty.current) {
+        setScenario(demoState.scenario);
+      }
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -68,10 +75,13 @@ export default function Replay() {
   }, []);
 
   const reset = async () => {
+    const target = scenario ?? state?.scenario;
+    if (!target) return;
     setRunning(false);
     setBusy(true);
     try {
-      await api("/demo/reset", { method: "POST", body: JSON.stringify({ scenario }) });
+      await api("/demo/reset", { method: "POST", body: JSON.stringify({ scenario: target }) });
+      scenarioDirty.current = false;
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -175,9 +185,13 @@ export default function Replay() {
                 <span className="field-label">Scenario</span>
                 <select
                   className="select"
-                  value={scenario}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setScenario(e.target.value)}
+                  value={scenario ?? ""}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                    scenarioDirty.current = true;
+                    setScenario(e.target.value);
+                  }}
                 >
+                  {scenario === null && <option value="" disabled>Loading scenario…</option>}
                   {SCENARIOS.map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
                   ))}
@@ -300,7 +314,7 @@ export default function Replay() {
             <div className="kv">
               <div className="kv-row">
                 <span className="kv-key">Scenario</span>
-                <span className="kv-value mono">{state?.scenario ?? scenario}</span>
+                <span className="kv-value mono">{state?.scenario ?? scenario ?? "—"}</span>
               </div>
               <div className="kv-row">
                 <span className="kv-key">Step</span>
