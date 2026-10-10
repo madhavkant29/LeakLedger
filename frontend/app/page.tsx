@@ -68,7 +68,7 @@ export default function Landing() {
             <Link className="btn btn-primary" href="/signin">
               Open demo <ArrowRight size={15} />
             </Link>
-            <a className="btn" href="#mechanism">See how it works</a>
+            <a className="btn" href="#demo">Watch demo</a>
           </div>
           <div className="landing-proof">
             <span><Check size={13} /> No AI</span>
@@ -106,6 +106,27 @@ export default function Landing() {
                 unmetered.
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-section" id="demo">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">Demo</div>
+          <h2 className="landing-h2">See the full incident lifecycle in three minutes.</h2>
+          <p className="landing-sub">
+            Hidden loss, trustworthy localisation, fail-closed evidence handling and repair verification, produced by
+            the deployed AWS pipeline.
+          </p>
+          <div className="video-frame">
+            <iframe
+              src="https://www.youtube-nocookie.com/embed/YbeU8c0kxNc"
+              title="LeakLedger demo video"
+              loading="lazy"
+              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
           </div>
         </div>
       </section>
@@ -229,27 +250,6 @@ export default function Landing() {
               </div>
               <p className="mt-12">Resolution requires distinct valid intervals, not a status change.</p>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="landing-section" id="demo">
-        <div className="landing-section-inner">
-          <div className="landing-kicker">Demo</div>
-          <h2 className="landing-h2">See the full incident lifecycle in three minutes.</h2>
-          <p className="landing-sub">
-            Hidden loss, trustworthy localisation, fail-closed evidence handling and repair verification, produced by
-            the deployed AWS pipeline.
-          </p>
-          <div className="video-frame">
-            <iframe
-              src="https://www.youtube-nocookie.com/embed/YbeU8c0kxNc"
-              title="LeakLedger demo video"
-              loading="lazy"
-              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              referrerPolicy="strict-origin-when-cross-origin"
-              allowFullScreen
-            />
           </div>
         </div>
       </section>
