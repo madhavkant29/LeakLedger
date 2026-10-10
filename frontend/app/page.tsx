@@ -48,6 +48,7 @@ export default function Landing() {
             <a href="#mechanism" className="nav-hide">Mechanism</a>
             <a href="#example" className="nav-hide">Example</a>
             <a href="#failclosed" className="nav-hide">Fail-closed</a>
+            <a href="#demo" className="nav-hide">Demo</a>
             <a href="#architecture" className="nav-hide">Architecture</a>
             <Link href="/signin" className="btn btn-sm">Sign in</Link>
             <Link href="/signin" className="btn btn-primary btn-sm">Open demo</Link>
@@ -228,6 +229,27 @@ export default function Landing() {
               </div>
               <p className="mt-12">Resolution requires distinct valid intervals, not a status change.</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="landing-section" id="demo">
+        <div className="landing-section-inner">
+          <div className="landing-kicker">Demo</div>
+          <h2 className="landing-h2">See the full incident lifecycle in three minutes.</h2>
+          <p className="landing-sub">
+            Hidden loss, trustworthy localisation, fail-closed evidence handling and repair verification, produced by
+            the deployed AWS pipeline.
+          </p>
+          <div className="video-frame">
+            <iframe
+              src="https://www.youtube-nocookie.com/embed/YbeU8c0kxNc"
+              title="LeakLedger demo video"
+              loading="lazy"
+              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              referrerPolicy="strict-origin-when-cross-origin"
+              allowFullScreen
+            />
           </div>
         </div>
       </section>
